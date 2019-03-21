@@ -9,9 +9,98 @@ abstract: |
 output: rticles::acm_article
 ---
 
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(ggplot2)
+library(readr)
+library(rticles)
+
+```
+
 # Introduction
 
-Where we say what we are going to do
+Our goal is to compute for each file the Degree of Authorship (DOA) measure:
+
+```
+DOA(f) = 3.293+1.098*FA+0.164*DL-0.321*log(1+AC)
+```
+
+where `f` is file; `FA` is true if the author is the first author of `f`; `DL` is the number of commits made by the author; `AC` is the total number of commits.
+
+Then for each file, the author with highest DOA will be consider the owner of that file.
+
+Then for each project, the truck factor (TF) is the number of owners you have to remove to affect half of the files in the project.
+
+
+```{r}
+strip <- function(name) strsplit(name,"[.]csv[.]gz")
+
+all_meta <- list.files("data/commit_metadata")
+name <-strip(all_meta[45])
+
+m <-  read_csv( paste0("data/commit_metadata/", name ,".csv.gz"))
+print(paste0("read ", nrow(m), " rows from project ", name ))
+f <-  read_csv( paste0("data/commit_files/",name,".csv.gz"))
+print(paste0("read ", nrow(f), " rows from project ",name))
+
+m %>%
+  rename(author=`author name`, time =`author timestamp`) %>%
+  select(author, time, hash) -> m1
+
+f %>%
+  rename(add = `added lines`) %>%
+  select(hash, add, file) %>%
+  filter(add != 0) %>%
+  filter( grepl( "\\.java$|\\.js$|\\.R$|\\.c$" , file)) -> f1
+
+print(paste0("removed ", nrow(f)-nrow(f1), " from f (", round(100*(nrow(f)-nrow(f1))/nrow(f),1),"%)"))
+
+m1 %>%
+  left_join(f1, by="hash") %>%
+  filter ( ! is.na(add)) %>%
+  select(author, time, file)  -> joined
+
+joined %>%
+  group_by(file) %>%
+  arrange(time, .by_group=TRUE) %>%
+  summarize(first=first(author)) ->first_authors
+
+joined %>%
+  group_by(file, author) %>%
+  summarize(my_commits=n()) -> commits_per_author_file
+
+joined %>%
+  group_by(file) %>%
+  summarize(all_commits=n()) -> commits_per_file
+
+first_authors %>%
+  left_join(commits_per_author_file, by = "file") %>%
+  left_join(commits_per_file, by = "file") %>%
+  rename(DL=my_commits,AC=all_commits) %>%
+  mutate(FA= author == first) -> df
+
+DOA <- 3.293 +(1.098*df$FA)+0.164*df$DL-0.321*log(1+df$AC)
+
+df %>% 
+  mutate(doa=DOA)  %>%
+  select(file,author,doa) -> df2
+
+df2 %>%
+  group_by(file) %>%
+  arrange(desc(doa)) %>%
+  summarize(owner=first(author)) -> owners
+
+file_count <- length(unique(df2$file))
+  
+owners %>%
+  group_by(owner) %>%
+  summarize(n=n(), perc = n/file_count) %>%
+  arrange(desc(perc)) %>%
+  mutate(cs = cumsum(perc), half = cs < .5, tf = cumsum(half) + 1) ->  result
+
+
+```
 
 # Methods
 
@@ -20,3 +109,5 @@ How are we going to do it
 # Results
 
 What we got
+
+
