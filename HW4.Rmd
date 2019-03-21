@@ -1,0 +1,68 @@
+---
+title: "HW4_DS6050"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+df <- wch_r.source_master_only
+#df$truck_factor <- NA
+#n<- nrow(df)
+#df %>% count(df$author) 
+```
+
+```{r}
+#df %>% rename(add=`added lines`)
+```
+
+In this analysis we load data from the R project and 
+endeavor to comput the truck factor of code files where
+our definition of TF is the number of developers who
+added code to that file.
+
+"To de???ne the authorsof a ???le, we rely on the Degree of Authorship (DOA) measure [2, 3], which is is computed asfollows:DOA = 3.293 + 1.098 ???FA + 0.164 ???DL ???0.321 ???ln(1 + AC )The degree of authorship of a developer din a ???le fdepends on three factors: ???rstauthorship (FA), number of deliveries (DL), and number of acceptances (AC). If dis theauthor of f,FA is 1; otherwise it is 0; DL is the number of changes in fmade by D;and AC is the number of changes in fmade by other developers. Basically, the weights ofeach variable assume that FA is by far the strongest predictor of ???le authorship. Recencyinformation (DL) also contributes positively to authorship, but with less importance. Finally,changes by other developers (AC) contribute to decrease someone's DOA, but at a slowerrate. The weights used in the DOA equation were empirically derived through an experimentwith seven professional Java developers [2]. The authors also showed that the model is robustenough to be used in di???erent environments and projects."
+
+```{r}
+#df <- read_csv("Downloads/wch_r-source_master_only.csv")
+
+df %>% rename(add=`added.lines`, file=`file.path`) %>% 
+       select(author,add,file,hash) %>%
+       filter(author!="(no author)" & author != "r") -> df2
+```
+
+The original data set  has `r nrow(df2)` commits and `r length(unique(df$author))` unique authors.
+
+```{r}
+df2 %>% filter( grepl("\\.c$|\\.R$|\\.h$", file)) -> df3
+```
+
+One we filter for code only, we get down to  `r nrow(df3)` commits.
+
+```{r}
+df3 %>% filter( add!=0 ) ->df4
+```
+
+Removing commits that only delete lines, gives us `r nrow(df4)` commits.
+
+```{r}
+df4 %>% group_by(file, author) %>% 
+    summarize(n=n())%>% 
+    group_by(file) %>% 
+    summarize(a=n()) %>% 
+    arrange(a) -> df5
+
+plot(df5$a)
+```
+
+Truck factor per file.
+
+```{r}
+df5 %>%filter(a==1) -> df6
+```
+The ratio of files with a truck factor of 1 is `r nrow(df6) / length(unique(df4$file))`.
