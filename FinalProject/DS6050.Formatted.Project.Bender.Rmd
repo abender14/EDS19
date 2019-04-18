@@ -1,0 +1,2031 @@
+---
+title: "Predicting International Happiness Scores"
+author: "Alex Bender"
+date: "April 17, 2019"
+output:
+  word_document: default
+  html_document: default
+email: bender.a@husky.neu.edu
+affiliation: Khoury College of Computer Sciences
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+```{r include=FALSE}
+#load country characteristics data
+cc_data <- read.csv("countries of the world.csv", dec=",")
+
+#load 2016 world happiness data
+wh2016 <- read.csv("happiness2016.csv")
+
+#load 2014 HDI data
+hdi2014 <- read.csv("human_development.csv", stringsAsFactors = FALSE)
+```
+
+```{r echo=FALSE, eval= FALSE}
+#gather data understanding
+str(cc_data)
+summary(cc_data)
+head(cc_data)
+```
+
+```{r echo=FALSE, eval= FALSE}
+#gather data understanding
+str(hdi2014)
+summary(hdi2014)
+head(hdi2014)
+```
+
+```{r echo=FALSE, eval= FALSE}
+#gather data understanding
+str(wh2016)
+summary(wh2016)
+head(wh2016)
+```
+
+# Introduction
+
+The objective of this project is to find the most important factors in predicting (and increasing) the happiness score of a country.I am hoping to provide a data-driven playbook that will help decision makers know what's important in regards to hppiness score, and develop and stretch my skills in all facets of the Data Science pipeline in an area of immense interest for me.
+
+The dataset descriptions are:
+
+**Countries of the World** - This data comes from the US CIA. It is general characteristsics on different nations of the world. Some columns included in the data are Region, Population, Area (sq. mi.), Pop. Density (per sq. mi.), Coastline (coast/area ratio), Net migration, Arable (%), Crops (%), Other (%), Climate.
+
+**UN Human Development Data** - This comes from the UN's 2015 Human Development report, which was used to calculate the Human Development Index. The datasets measures status of different nations in different metrics of human development. Some columns included in the data are Life Expectancy at Birth, Expected Years of Education, Mean Years of Education, Gross National Income (GNI) per Capita, GNI per Capita Rank Minus HDI Rank.
+
+**World Happiness** - The World Happiness Report was released at the United Nations at an event celebrating International Day of Happiness on March 20th. The report continues to gain global recognition. Happiness Score is based on the World Happiness Report which includes GDP per Capita, Family, Life Expectancy, Freedom, Generosity, Trust Government Corruption, etc.
+
+
+I am going to explore world happiness(WH), human development(HDI), and country characteristics(CC) data in order to derive interesting insights. I will be operating on the assumption of using the HDI data from 2014, WH data from 2016, and CC data from as recent as 2017. Though the data is not all from the same time period, I will be assuming that the variation between the few years won't be significant enough to skew results significantly. 
+
+**My overall plan of action:** 
+
+- I am going to use the 2016 World Happiness data as my basis for dependent variables.
+
+- I plan to do numeric prediction/regression by predicting the happiness score of a nation using the happiness score column from the wh2016 data. I will be exploring multiple linear regression, regression tree, neural network, and kNN models.
+
+- As my independent variables I will be using the Human Development Index and Country Characteristics data in order to attempt to predict the target/response variables from the world happiness data. 
+
+- I won't be using the additional features in the World Happiness data as predictors for two reasons. 1) The world happiness score is a direct calculation from these features, so I don't want to risk overfitting by the model just memorizing the calculation essentially. 2) I want to derive novel insights from a various set of predictors from the other two datasets. 
+
+
+# Data Understanding and Preparation
+
+The loaded data has different numbers of rows, meaning that different countries are included in the different datasets. This will be reconcilied by only including the countries located in the dataset with the least amount of countries (world happiness 2016). Since my analysis relies on merging the unqiue nation metrics from the various datasets, it would be wise to only included the countries with full data. Still, this leaves us with over 150 countries, which is enough to run both numeric prediction (regression) and classification data mining tasks.The data set is a similar size to the built in Iris dataset, with more dimensions, so it should still be fine. I will combat this small amount of data with the use of k-fold Cross-validation. 
+
+
+Now we have to merge the datasets properly. First we have to match up the rows based on Country name. If different datasets name countries differently, this will pose a challenge. 
+
+```{r include=FALSE}
+library(tidyverse)
+```
+
+To reduce chances for errors down the line, I trimmed any additional whitespaces from the data using the str_trim function. 
+
+```{r}
+#Get rid of unnecessary whitespace
+cc_data$Country <- str_trim(cc_data$Country) %>% as.factor()
+cc_data$Region <- str_trim(cc_data$Region) %>% as.factor()
+hdi2014$Country <- str_trim(hdi2014$Country) %>% as.factor()
+wh2016$Country <- str_trim(wh2016$Country) %>% as.factor()
+wh2016$Region <- str_trim(wh2016$Region) %>% as.factor()
+```
+
+
+```{r include=FALSE}
+#select only the needed columns 
+wh2016 <- select(wh2016, Country, Region, Happiness.Score)
+```
+
+The world happiness dataset has `r nrow(wh2016)` countries. 
+
+
+I am going to standardize all of the country names using a convenient function in the standardize text package. The function recognizes common variations of country names and essentially "Autocorrects" them into a standard format. This will help a lot when joining datasets together. 
+
+```{r}
+#install.packages("StandardizeText")
+library(StandardizeText)
+
+#Standardize column using default country names
+hdi2014$Country <- standardize.countrynames(hdi2014$Country,suggest="auto", verbose = T)
+```
+I can see here that some useful changes were made! Also it seems there was an encoding error for "Côte d'Ivoire", so I will manually change this to "Cote d'Ivoire" in the hdi2014 dataset. 
+
+```{r}
+#Replace mistake manually
+hdi2014$Country[which(hdi2014$Country=="Côte d'Ivoire")] <- "Cote d'Ivoire"
+
+#Make sure it worked
+hdi2014$Country[which(hdi2014$Country=="Côte d'Ivoire")]
+hdi2014$Country[which(hdi2014$Country=="Cote d'Ivoire")]
+
+```
+
+
+```{r}
+#Standardize column using default country names
+wh2016$Country <- standardize.countrynames(wh2016$Country,suggest="auto", verbose = T)
+```
+
+This data had 8 names that required standardization! Also, some names weren't recognized, but we will see if we need those. 
+
+```{r}
+#Standardize column using default country names
+cc_data$Country <- standardize.countrynames(cc_data$Country,suggest="auto")
+```
+
+Perfect! Now all country names should be standardized, so we can do a join. Let's see which countries from the world happiness data do not have a match in the human development data using an anti-join. 
+```{r}
+#make sure the country name standardization worked
+non_matches <- anti_join(wh2016[1], hdi2014[2], by = "Country")
+non_matches2 <- anti_join(wh2016[1], cc_data[1] , by = "Country")
+
+#print out distinct non-matches
+aa<-distinct(rbind(non_matches,non_matches2))
+```
+
+There are `r nrow(aa)` countries that have a happiness score but do not have any data in either the HDI data or the CC data are Puerto Rico, Taiwan, North Cyprus, Somalia, Kosovo, Somaliland Region, Montenegro, Palestinian Territory, Myanmar, and South Sudan. Because these countries don't have any data from the other datasets for the dependent/response/target variable, they would essentially be complete empty rows. From the eventual merged data, I will be removing these countries for the analysis. 
+
+In order to merge the datasets, I am going to do an inner join, which will essentially pull all the data that both datasets have based on matching the "Country" column. For example, a sample row will contain the data columns located in the all three datasets for a single country name, such as France.
+```{r}
+#merge datasets to make final dataset
+world_df <- inner_join(wh2016, hdi2014, by = "Country")
+
+world_df <- inner_join(world_df, cc_data, by = "Country")
+
+nrow(world_df)
+```
+`r nrow(world_df)` countries remaining, perfect!
+
+
+```{r include=FALSE}
+cc_data[which(cc_data$Country=="France"),"Population"]
+hdi2014[which(hdi2014$Country=="France"),"Mean.Years.of.Education"]
+wh2016[which(wh2016$Country=="France"),"Happiness.Score"]
+world_df[which(world_df$Country=="France"),c("Population", "Mean.Years.of.Education", "Happiness.Score")]
+```
+
+
+```{r include=FALSE}
+str(world_df)
+```
+Here we see some features that will require attention. 1) there are two region columns from 2 different datasets. We will only use one of these. I am going to use the regions from the World Happiness data and remove the other column. 2) HDI rank acts as a row number in the hdi data and doesn't add information beyond the HDI score, so we will remove the rank column. 3) Since the rank column won't be used I will also remove the "GNI.per.Capita.Rank.Minus.HDI.Rank" columns since it relies on rank and I could not find an explanation of what this column means. 4) The punctuation located within the feature names got coerced into "." periods, so I will be renaming some columns to make them more readable. 5) The gross national income columns is currently a character instead of a numeric. 
+
+```{r include=FALSE}
+#get rid of duplicate region column, HDI rank column, GNI.per.Capita.Rank.Minus.HDI.Rank column
+world_df <-select(world_df, -Region.y) 
+world_df <- select(world_df, -HDI.Rank) 
+world_df <- select(world_df, -GNI.per.Capita.Rank.Minus.HDI.Rank)
+```
+
+
+```{r include=FALSE}
+world_df <- rename(world_df, Region = "Region.x", HDI.Score = "Human.Development.Index..HDI.", Gross.National.Income.per.Capita ="Gross.National.Income..GNI..per.Capita", Area.sq.mi = "Area..sq..mi..",Pop.Density.per.sq.mi =  "Pop..Density..per.sq..mi..",Coast.Area.Ratio= "Coastline..coast.area.ratio.", Infant.Mortality.per.1000.births= "Infant.mortality..per.1000.births.", GDP.per.capita = "GDP....per.capita.", Literacy.percent ="Literacy....", Phones.per.1000.people ="Phones..per.1000.", Arable.percent="Arable....", Crops.percent = "Crops....", Other.Land.Use.percent= "Other....")
+```
+
+
+```{r include=FALSE}
+world_df$Gross.National.Income.per.Capita <- as.numeric(gsub(",", "", world_df$Gross.National.Income.per.Capita))
+
+```
+
+
+```{r}
+anyNA(world_df)
+```
+
+There are NA values, so let's try to handle these. 
+```{r include=FALSE}
+summary(world_df)
+```
+
+The aren't very many NA values since the datasets were pretty full, but there are 3 in Literacy.percent, 1 in Phones.per.1000, 16 in Climate, 1 in Birthrate, and 1 in Deathrate. Since there aren't a lot, I am going to impute these values. This can be done in a variety of ways. Since they are all numerical features, I could impute them with the mean or median. Also, I could impute using similar countries based on a model such as kNN. Since the dimensionality is quite high for kNN which works best on low dimensions 5-15 and there are 25, I won't use this method. Additionaly, due to the small amount of NAs, a central tendency imputation will likely be quite accurate and/or not skew the model much.
+
+I will replace all with median, since it is less sensitive to outliers. 
+
+```{r include=FALSE}
+#replace Literacy.percent with the median
+world_df$Literacy.percent[is.na(world_df$Literacy.percent)] <- median(world_df$Literacy.percent, na.rm = T)
+
+#replace Phones.per.1000 with the median
+world_df$Phones.per.1000.people[is.na(world_df$Phones.per.1000.people)] <- median(world_df$Phones.per.1000.people, na.rm = T)
+
+#replace Climate with the median
+world_df$Climate[is.na(world_df$Climate)] <- median(world_df$Climate, na.rm = T)
+
+#replace Birthrate with the median
+world_df$Birthrate[is.na(world_df$Birthrate)] <- median(world_df$Birthrate, na.rm = T)
+
+#replace Deathrate with the median
+world_df$Deathrate[is.na(world_df$Deathrate)] <- median(world_df$Deathrate, na.rm = T)
+```
+
+
+```{r}
+#make sure it worked
+anyNA(world_df)
+```
+Awesome! All NA values have been imputed with the median. 
+
+Now are there any outliers?!?
+
+There are multiple ways to detect outliers, such as using the IQR and the z-score, then we will make a determination of what to do with these values if any. Outliers can also be detected by plotting a linear regression model and with principal component analysis. 
+
+I am going to detect outliers using the  Z/score.
+
+Outlier = +/- 3 standard deviations from the mean. (A.k.a +/- z-score of 3). 3 is a rule of thumb, it does not work in every instance. We are going to use 3 in this instance since the variance is relatively standard and there are no observable clusters in the data. We could explore other values for the cutoff based on variance in the features because sometimes if there is pretty low variance and values tend to stick around a certain point, then a lower threshold may be better than the 3 heuristic. However, we are making the decision to explore IQR as another outlier detection method rather than other z-score cutoffs. 
+```{r}
+#create a function that calculates outliers based on zscore and formula above
+#function takes in a continuous variable and spits out the z scores
+outlier.z <- function(cvar) {
+a <- sd(cvar)
+b <- mean(cvar)  
+c <- ((b-cvar)/(a))
+c
+}
+```
+First let's output all observation numbers of the rows that have a abs(z-score) >3
+```{r include=FALSE}
+#detect which countries have large z-scores
+n <- ncol(world_df)
+for (i in 3:n){
+p <- world_df[abs(outlier.z(world_df[,i]))>3,"Country"]
+print(p)
+}
+```
+Based on the z-score method we can see that many countries have values that are larger than 3 z-scores from the mean in certain features. The countries fall on both high and low ends of the spectrum. These listed countries would be considered outliers by this method. 
+
+For example, you can see that China and India are outliers in terms of population, and the 6 largest countries are outliers in terms of land area. Singapore and Hong Kong are outliers in terms of Population Density. Luxembourg is an outlier in terms of GDP per capita. All of these findings match with what we would expect logically, which is a good sign. 
+
+Now let's explore some of these outliers visually. 
+
+```{r include=FALSE}
+library(ggplot2)
+#install.packages("GridExtra")
+library(gridExtra)
+#install.packages("ggrepel")
+library(ggrepel)
+attach(world_df)
+```
+
+```{r include=FALSE}
+#make boxplot for GNI per capita that labels outliers
+g1 <- world_df %>%
+  mutate(outlier = ifelse(abs(outlier.z(Gross.National.Income.per.Capita))>3, Country, "")) %>%
+  ggplot(., aes(x = "", y = Gross.National.Income.per.Capita)) +
+    geom_boxplot(fill = "#d6bea9") +
+    geom_text_repel(aes(label = outlier), hjust = -0.2)
+
+#make boxplot for population that labels outliers
+g2 <- world_df %>%
+  mutate(outlier = ifelse(abs(outlier.z(Population))>3, Country, "")) %>%
+  ggplot(., aes(x = "", y = Population)) +
+    geom_boxplot(fill = "#0066cc") +
+    geom_text_repel(aes(label = outlier), hjust = -0.2)
+
+
+#make boxplot for land area that labels outliers
+g3 <- world_df %>%
+  mutate(outlier = ifelse(abs(outlier.z(Area.sq.mi))>3, Country, "")) %>%
+  ggplot(., aes(x = "", y = Area.sq.mi)) +
+    geom_boxplot(fill = "#1cb2e3") +
+    geom_text_repel(aes(label = outlier), hjust = -0.2)
+#make boxplot for population density that labels outliers
+g4 <- world_df %>%
+  mutate(outlier = ifelse(abs(outlier.z(Pop.Density.per.sq.mi))>3, Country, "")) %>%
+  ggplot(., aes(x = "", y = Pop.Density.per.sq.mi)) +
+    geom_boxplot(fill = "#54acbe") +
+    geom_text_repel(aes(label = outlier), hjust = -0.2)
+
+#make boxplot for coast area ratio that labels outliers
+g5 <- world_df %>%
+  mutate(outlier = ifelse(abs(outlier.z(Coast.Area.Ratio))>3, Country, "")) %>%
+  ggplot(., aes(x = "", y = Coast.Area.Ratio)) +
+    geom_boxplot(fill = "#cbe123") +
+    geom_text_repel(aes(label = outlier), hjust = -0.2)
+
+#make boxplot for net migration that labels outliers
+g6 <- world_df %>%
+  mutate(outlier = ifelse(abs(outlier.z(Net.migration))>3, Country, "")) %>%
+  ggplot(., aes(x = "", y = Net.migration)) +
+    geom_boxplot(fill = "#0077dd") +
+    geom_text_repel(aes(label = outlier), hjust = -0.2)
+
+#make boxplot for infant mortality that labels outliers
+g7 <- world_df %>%
+  mutate(outlier = ifelse(abs(outlier.z(Infant.Mortality.per.1000.births))>3, Country, "")) %>%
+  ggplot(., aes(x = "", y = Infant.Mortality.per.1000.births)) +
+    geom_boxplot(fill = "#ef14d1") +
+    geom_text_repel(aes(label = outlier), hjust = -0.2)
+
+#make boxplot for GDP Per capita that labels outliers
+g8 <- world_df %>%
+  mutate(outlier = ifelse(abs(outlier.z(GDP.per.capita))>3, Country, "")) %>%
+  ggplot(., aes(x = "", y = GDP.per.capita)) +
+    geom_boxplot(fill = "#12ab1a") +
+    geom_text_repel(aes(label = outlier), hjust = -0.2)
+
+#make boxplot for literacy that labels outliers
+g9 <- world_df %>%
+  mutate(outlier = ifelse(abs(outlier.z(Literacy.percent))>3, Country, "")) %>%
+  ggplot(., aes(x = "", y = Literacy.percent)) +
+    geom_boxplot(fill = "#bcde28") +
+    geom_text_repel(aes(label = outlier), hjust = -0.2)
+
+#make boxplot for phones that labels outliers
+g10 <- world_df %>%
+  mutate(outlier = ifelse(abs(outlier.z(Phones.per.1000.people))>3, Country, "")) %>%
+  ggplot(., aes(x = "", y = Phones.per.1000.people)) +
+    geom_boxplot(fill = "#9aad3f") +
+    geom_text_repel(aes(label = outlier), hjust = -0.2)
+
+#make boxplot for arable that labels outliers
+g11 <- world_df %>%
+  mutate(outlier = ifelse(abs(outlier.z(Arable.percent))>3, Country, "")) %>%
+  ggplot(., aes(x = "", y = Arable.percent)) +
+    geom_boxplot(fill = "#1834af") +
+    geom_text_repel(aes(label = outlier), hjust = -0.2)
+
+#make boxplot for crops that labels outliers
+g12 <- world_df %>%
+  mutate(outlier = ifelse(abs(outlier.z(Crops.percent))>3, Country, "")) %>%
+  ggplot(., aes(x = "", y = Crops.percent)) +
+    geom_boxplot(fill = "#fe1568") +
+    geom_text_repel(aes(label = outlier), hjust = -0.2)
+
+#make boxplot for deathrate that labels outliers
+g13 <- world_df %>%
+  mutate(outlier = ifelse(abs(outlier.z(Deathrate))>3, Country, "")) %>%
+  ggplot(., aes(x = "", y = Deathrate)) +
+    geom_boxplot(fill = "#b15c16") +
+    geom_text_repel(aes(label = outlier), hjust = -0.2)
+
+
+#make boxplot for agriculture that labels outliers
+g14 <- world_df %>%
+  mutate(outlier = ifelse(abs(outlier.z(Agriculture))>3, Country, "")) %>%
+  ggplot(., aes(x = "", y = Agriculture)) +
+    geom_boxplot(fill = "#ed1478") +
+    geom_text_repel(aes(label = outlier), hjust = -0.2)
+
+#make boxplot for industry that labels outliers
+g15 <- world_df %>%
+  mutate(outlier = ifelse(abs(outlier.z(Industry))>3, Country, "")) %>%
+  ggplot(., aes(x = "", y = Industry)) +
+    geom_boxplot(fill = "#bb0000") +
+    geom_text_repel(aes(label = outlier), hjust = -0.2)
+detach(world_df)
+```
+
+
+```{r echo=FALSE}
+grid.arrange(g1, g2, g3, g4, nrow = 2)
+grid.arrange(g5, g6, g7, g8, nrow = 2)
+grid.arrange(g9, g10, g11, g12, nrow = 2)
+grid.arrange(g13, g14, g15, nrow = 2)
+```
+
+These boxplots (representing all of the features that contain outliers based on z-score) clearly show a good story into the data. All of the findings make sense with what we would expect and accessible layout the distributions of the features as well as label the outlier countries. The removal of outliers is something to take seriously. It could have big negative ramifications if you remove outliers without justification. Since all of the outliers here represent actual conditions out in the world and are not based on data input error, I am going to make the careful decision to leave them all in the dataset. This is an assumption that will be marked. I will pay particular attention to output result with these in mind. However, I fully expect that the presence of these data points won't affect our analysis to a grand extent. 
+
+Also, since we don't have very many observations, once we scale our data, outliers now may not remain outliers. Lastly, once more data is collected (such as with the other countries in the world), it's possible outliers won't be outliers anymore. 
+
+Let's do some more exploratory visualizations to get a sense of relationships between variables. 
+
+```{r echo=FALSE}
+r1 <- ggplot(world_df, aes(Region, Happiness.Score))
+
+#show region names
+levels(world_df$Region)
+#abbreviate region names to make graph more legible
+reg_abbr <- c("Australia and New Zealand" = "Aus&NZ", "Central and Eastern Europe" = "Cen.E Eur","Eastern Asia" = "E. Asia", "Latin America and Caribbean" = "LatCari", "Middle East and Northern Africa" = "MENA", "North America" = "N. Amer.", "Southeastern Asia" = "SE. Asia", "Southern Asia" = "S. Asia", "Sub-Saharan Africa" = "S-S.Africa", "Western Europe" = "W. Eur.")
+
+#plot dotplot to show distribution
+r1 + geom_dotplot(binaxis = "y", stackdir = "center", binwidth = 0.1, fill = "#1995AD") + scale_x_discrete(labels = reg_abbr) + ggtitle("Happiness Scores by Region")
+```
+
+This dot plot nicely shows some distribution of happiness scores by region. You can see some regions such as the Middle East and North Africa have a large varaince. For example, there is a country with a happiness score of just above 3, but there is also a country with a happiness score of over 7. Also, you can see that the regions North America and Australia & NZ only have two members each. 
+
+Because the variance within regions is high and some regions only have a few members, I anticipate my eventual classification of region may be difficult. I can try to combat this with a few methods such as stratified sampling, sampling with replacement, and k-fold cross validation. We will see how it turns out!
+
+
+My first model I am going to explore is Multiple Linear Regression in hopes of predicting the Happiness score of a nation.
+
+# Multiple Linear Regression
+
+Let's do some correlation/collinearity analysis, since multicollinearity can doom a regression model.
+
+Let's explore correlations to the response variable Happiness Score since the full correlation table would be hard to digest. 
+
+```{r include=FALSE}
+#correlations just to the response variable Sale Price
+cormatx.response <- round(cor(world_df[c(4:26)], world_df[3]),2)
+cormatx.response
+```
+High values indicate high correlations, and when there are multiple features correlated with one another (which is not visualized here...yet), that indicates collinearity, which is not ideal for a regression analysis. Essentially, the same information is conveyed by multiple variables. Right off the bat I can see some high correlations such as between HDI Score and Happiness Score. 
+
+This is a little difficult to visualize, though. Let's see if we can visualize it better. 
+
+Using starter code from STHDA, we are going to create a correlation matrix that is shaded by intensity of correlation.
+```{r include=FALSE}
+#create full correlation matrix 
+cormatx <- round(cor(world_df[3:26]), 2)
+
+reorder_cormatx <- function(cormat){
+# Use correlation between variables as distance
+dd <- as.dist((1-cormatx)/2)
+hc <- hclust(dd)
+cormat <-cormat[hc$order, hc$order]
+}
+```
+
+```{r include=FALSE}
+# Get upper triangle of the correlation matrix
+  get_upper_tri <- function(cormat){
+    cormat[lower.tri(cormat)]<- NA
+    return(cormat)
+  }
+```
+
+```{r echo=FALSE}
+#install.packages("reshape2")
+library(reshape2)
+# Reorder the correlation matrix
+cormatx <- reorder_cormatx(cormatx)
+upper_tri <- get_upper_tri(cormatx)
+# Melt the correlation matrix
+melted_cormatx <- melt(upper_tri, na.rm = TRUE)
+# Create a ggheatmap
+ggheatmap <- ggplot(melted_cormatx, aes(Var2, Var1, fill = value))+
+ geom_tile(color = "white")+
+ scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
+   midpoint = 0, limit = c(-1,1), space = "Lab", 
+    name="Pearson\nCorrelation") +
+  theme_minimal()+ # minimal theme
+ theme(axis.text.x = element_text(angle = 45, vjust = 1, 
+    size = 6, hjust = 1.5))+
+ coord_fixed()
+
+#format heatmap
+ggheatmap + 
+geom_text(aes(Var2, Var1, label = value), color = "black", size = 1.2) +
+theme(
+  axis.title.x = element_blank(),
+  axis.title.y = element_blank(),
+  panel.background = element_blank(),
+  axis.ticks = element_blank(),
+  legend.justification = c(1, 0),
+  legend.position = c(0.6, 0.7),
+  legend.direction = "horizontal")+
+  guides(fill = guide_colorbar(barwidth = 5, barheight = .5,
+                title.position = "top", title.hjust = 0.5))
+```
+
+Ahh much better. Now we can visualize our correlations. As we can see, some overall correlations between the variables are pretty high which means there is likely collinearity. The strongest correlations (which we are going to count as ones with an absolute value >=.75 ) are between HDI.Score and other variables. Since HDI Score is essentially another dependent variable that was calculated based on a variety of factors, I am going to drop it and keep the other features and see how this improves collinearity. Collinearity exists when too many features explain eachother, and it seems that the correlations between the variables are high enough to explain eachother. 
+
+Since feature removal is a big deal and can have large adverse impacts to a model if done incorrectly, I won't make any additional removals before creating a model and finding the Variance Inflation Factor (VIF) for each predictor. This VIF value will help me understand when it's safe to remove features. 
+
+I will be building this regression model shortly. 
+
+First, I want to do some more exploratory data visualization with pairs.panels() and inspect distribution of features to see if I need to apply transforms in order to make a normally distributed dataset. Linear regression is parametric and assuming features are normally distributed.
+
+```{r include=FALSE}
+#install.packages("psych")
+library(psych)
+```
+
+
+```{r echo=FALSE}
+pairs.panels(world_df[3:7])
+pairs.panels(world_df[8:12])
+pairs.panels(world_df[13:17])
+pairs.panels(world_df[18:22])
+pairs.panels(world_df[23:26])
+```
+
+When the oval (correlation elipse) is stretched, it means a strong correlation. We can see that Expected years of education and mean years of education have strong correlations and likely explain eachother, for example. There could be collinearity between these. 
+
+Regression assumes normality, so let's see if any transforms help the data look more normally distributed. Age and absences in particular look off.
+
+Let's explore a few of these closer. In particular we are concerned about transforming the variables such as HDI.Score, Life Expectancy, Mean years of education, Gross National Income, Population, Area sq mi, population density, coast area ratio, net migration, infant mortality, GDP per capita, literacy, phones per 1000, arable percent, crops percent, other land use percent, climate, birthrate, deathrate, agriculture  to make them resemble normal distributions more closely. I am deeming the other features to be fairly normally distributed.
+
+Disclaimer: it is possible that some of these features may not even make it into the final model due to feature selection and backfitting, but I am going to normalize them for good measure. 
+
+To make this faster I will make function to min/max and z-score transform features
+```{r include=FALSE}
+#normalize columns with min-max normalization by creating a function that takes in an argument "x" and normalizes between 0-1 using the min and max method
+normalize <- function(x) {
+  return( (x-min(x))/ diff(range(x)))
+}
+
+#standardize columns with z-score standardization by creating a function that takes in an argument "y" and standardizes between +/- z-scores using z-score standardization method
+zstandardize <- function(y) {
+  return( (y-mean(y))/ (sd(y)))
+}
+
+```
+
+
+First let's start with HDI.Score.
+```{r echo=FALSE}
+# Histogram with density instead of count on y-axis
+# Overlay with transparent density plot
+
+#ORIGINAL
+a <- ggplot(world_df, aes(x=world_df$HDI.Score)) + geom_histogram(aes(y=..density..),bins=10, colour="black", fill="#07575b")+geom_density(alpha=.2, fill="#c4dfe6")
+
+#LOG TRANSFORM
+a1 <- ggplot(world_df, aes(x=log(world_df$HDI.Score))) + geom_histogram(aes(y=..density..),bins=10, colour="black", fill="#07575b")+geom_density(alpha=.2, fill="#c4dfe6")
+
+#INVERSE TRANSFORM
+a2 <- ggplot(world_df, aes(x=1/((world_df$HDI.Score)))) + geom_histogram(aes(y=..density..),bins=10, colour="black", fill="#07575b")+geom_density(alpha=.2, fill="#c4dfe6")
+
+#SQRT TRANSFORM
+a3 <- ggplot(world_df, aes(x=sqrt(world_df$HDI.Score))) + geom_histogram(aes(y=..density..),bins=10, colour="black", fill="#07575b")+geom_density(alpha=.2, fill="#c4dfe6")
+
+#SQUARE TRANSFORM
+a4 <- ggplot(world_df, aes(x=(world_df$HDI.Score)^2)) + geom_histogram(aes(y=..density..),bins=10, colour="black", fill="#07575b")+geom_density(alpha=.2, fill="#c4dfe6")
+
+#MIN/MAX TRANSFORM
+a5 <- ggplot(world_df, aes(x=normalize(world_df$HDI.Score))) + geom_histogram(aes(y=..density..),bins=10, colour="black", fill="#07575b")+geom_density(alpha=.2, fill="#c4dfe6")
+
+#Z-SCORE TRANSFORM
+a6 <- ggplot(world_df, aes(x= zstandardize(world_df$HDI.Score))) + geom_histogram(aes(y=..density..),bins=10, colour="black", fill="#07575b")+geom_density(alpha=.2, fill="#c4dfe6")
+#print original
+a
+#print options
+grid.arrange(a1,a2,a3,a4,a5,a6, nrow=3)
+```
+
+It looks like the Square ^2 transform makes it most resemble a normal distribution, so let's replace it with its square.
+
+```{r include=FALSE}
+#make new data frame that is more normally distributed
+world_norm_dist <- world_df
+
+#replace feature
+world_norm_dist$HDI.Score <- (world_df$HDI.Score)^2
+```
+
+Now Life Expectancy.
+
+```{r echo = FALSE}
+# Histogram with density instead of count on y-axis
+# Overlay with transparent density plot
+
+#ORIGINAL
+a <- ggplot(world_df, aes(x=world_df$Life.Expectancy.at.Birth)) + geom_histogram(aes(y=..density..),bins=10, colour="black", fill="#07575b")+geom_density(alpha=.2, fill="#c4dfe6")
+
+#LOG TRANSFORM
+a1 <- ggplot(world_df, aes(x=log(world_df$Life.Expectancy.at.Birth))) + geom_histogram(aes(y=..density..),bins=10, colour="black", fill="#07575b")+geom_density(alpha=.2, fill="#c4dfe6")
+
+#INVERSE TRANSFORM
+a2 <- ggplot(world_df, aes(x=1/((world_df$Life.Expectancy.at.Birth)))) + geom_histogram(aes(y=..density..),bins=10, colour="black", fill="#07575b")+geom_density(alpha=.2, fill="#c4dfe6")
+
+#SQRT TRANSFORM
+a3 <- ggplot(world_df, aes(x=sqrt(world_df$Life.Expectancy.at.Birth))) + geom_histogram(aes(y=..density..),bins=10, colour="black", fill="#07575b")+geom_density(alpha=.2, fill="#c4dfe6")
+
+#SQUARE TRANSFORM
+a4 <- ggplot(world_df, aes(x=(world_df$Life.Expectancy.at.Birth)^2)) + geom_histogram(aes(y=..density..),bins=10, colour="black", fill="#07575b")+geom_density(alpha=.2, fill="#c4dfe6")
+
+#MIN/MAX TRANSFORM
+a5 <- ggplot(world_df, aes(x=normalize(world_df$Life.Expectancy.at.Birth))) + geom_histogram(aes(y=..density..),bins=10, colour="black", fill="#07575b")+geom_density(alpha=.2, fill="#c4dfe6")
+
+#Z-SCORE TRANSFORM
+a6 <- ggplot(world_df, aes(x= zstandardize(world_df$Life.Expectancy.at.Birth))) + geom_histogram(aes(y=..density..),bins=10, colour="black", fill="#07575b")+geom_density(alpha=.2, fill="#c4dfe6")
+#print original
+a
+#print options
+grid.arrange(a1,a2,a3,a4,a5,a6, nrow=3)
+```
+It looks like the min/max transform makes it most resemble a normal distribution since it slightly reduces the left skew, so let's replace it with it.
+
+```{r include=FALSE}
+#replace feature
+world_norm_dist$Life.Expectancy.at.Birth <- normalize(world_df$Life.Expectancy.at.Birth)
+```
+
+The above iterations of testing and transforming features shows the process visually. Now, in orer to speed things up for the remaining 18 features I want to transform, I am going to use the bestNormalize package. This package checks all of the transforms (plus more complicated ones) similar to how I have been doing, then transforms the data based on the best transform. The best transform is determined by the Estimated Normality Statistics (Pearson P / df). The lower the value ==> the more normal it is. The function is doing repeated CV in order to find the best transform. 
+
+The orderNorm method guarantees normality, so I will set this to false since it is not as natural of a transform. 
+
+Use bestNormalize for remaining features. 
+```{r include=FALSE}
+#install.packages("bestNormalize")
+library(bestNormalize)
+set.seed(300)
+
+# Pick the best one automatically for the remaining features
+#k = number of folds and r = number of repeats for the CV. Helps with run=time performance
+mean.edu.t <- bestNormalize(world_df$Mean.Years.of.Education, allow_orderNorm = F, k = 5, r = 3)
+gni.t <- bestNormalize(world_df$Gross.National.Income.per.Capita, allow_orderNorm = F, k = 5, r = 3)
+pop.t <- bestNormalize(world_df$Population, allow_orderNorm = F, k = 5, r = 3)
+area.t <- bestNormalize(world_df$Area.sq.mi, allow_orderNorm = F, k = 5, r = 3)
+pop.den.t <- bestNormalize(world_df$Pop.Density.per.sq.mi, allow_orderNorm = F, k = 5, r = 3)
+coast.t <- bestNormalize(world_df$Coast.Area.Ratio, allow_orderNorm = F, k = 5, r = 3)
+migrate.t <- bestNormalize(world_df$Net.migration, allow_orderNorm = F, k = 5, r = 3)
+infant.t <- bestNormalize(world_df$Infant.Mortality.per.1000.births, allow_orderNorm = F, k = 5, r = 3)
+gdp.t <- bestNormalize(world_df$GDP.per.capita, allow_orderNorm = F, k = 5, r = 3)
+literacy.t <- bestNormalize(world_df$Literacy.percent, allow_orderNorm = F, k = 5, r = 3)
+phone.t <- bestNormalize(world_df$Phones.per.1000.people, allow_orderNorm = F, k = 5, r = 3)
+arable.t <- bestNormalize(world_df$Arable.percent, allow_orderNorm = F, k = 5, r = 3)
+crop.t <- bestNormalize(world_df$Crops.percent, allow_orderNorm = F, k = 5, r = 3)
+other.t <- bestNormalize(world_df$Other.Land.Use.percent, allow_orderNorm = F, k = 5, r = 3)
+climate.t <- bestNormalize(world_df$Climate, allow_orderNorm = F, k = 5, r = 3)
+birth.t <- bestNormalize(world_df$Birthrate, allow_orderNorm = F, k = 5, r = 3)
+death.t <- bestNormalize(world_df$Deathrate, allow_orderNorm = F, k = 5, r = 3)
+agricul.t <- bestNormalize(world_df$Agriculture, allow_orderNorm = F, k = 5, r = 3)
+```
+
+
+The best transform is chosen. This takes quite a while to run because it is doing 5 fold CV with 3 repeats for every feature to ensure the best transform is chosen.
+
+Now that we have found the best transform for all of the remaining features, I am going to show an example output and then replace the values in our dataframe with the transformed values. The transformed values from the bestNormalize function can be accessed in the $x.t call.
+
+An example output for the Infant Mortality feature is:
+```{r}
+#Show chosen transform and statistics
+infant.t
+#Show transformed values
+head(infant.t$x.t)
+```
+
+
+Let's see if this actually works visually.
+
+```{r echo=FALSE}
+#spot check for gni
+a1 <- ggplot(world_df, aes(x= gni.t$x.t)) + geom_histogram(aes(y=..density..),bins=10, colour="black", fill="#07575b")+geom_density(alpha=.2, fill="#c4dfe6")
+
+#spot check for deathrate
+a2 <- ggplot(world_df, aes(x= death.t$x.t)) + geom_histogram(aes(y=..density..),bins=10, colour="black", fill="#07575b")+geom_density(alpha=.2, fill="#c4dfe6")
+
+#spot check for gdp per capita
+a3 <- ggplot(world_df, aes(x= gdp.t$x.t)) + geom_histogram(aes(y=..density..),bins=10, colour="black", fill="#07575b")+geom_density(alpha=.2, fill="#c4dfe6")
+
+#Box Cox transform for infant mortality
+a4 <- ggplot(world_df, aes(x= infant.t$x.t)) + geom_histogram(aes(y=..density..),bins=10, colour="black", fill="#07575b")+geom_density(alpha=.2, fill="#c4dfe6")
+
+grid.arrange(a1,a2,a3,a4,nrow=2)
+```
+
+Looks a lot better than before! Now let's apply all of these to the normally distributed data frame. If at the end of our regression analysis we have to reverse any transform, we can easily access which transform was applied using the $chosen_transform call. 
+
+```{r include=FALSE}
+#replace features with transforms
+world_norm_dist$Mean.Years.of.Education <- mean.edu.t$x.t 
+world_norm_dist$Gross.National.Income.per.Capita <- gni.t$x.t  
+world_norm_dist$Population <- pop.t$x.t  
+world_norm_dist$Area.sq.mi <- area.t$x.t  
+world_norm_dist$Pop.Density.per.sq.mi <- pop.den.t$x.t  
+world_norm_dist$Coast.Area.Ratio <- coast.t$x.t  
+world_norm_dist$Net.migration <- migrate.t$x.t  
+world_norm_dist$Infant.Mortality.per.1000.births <- infant.t$x.t  
+world_norm_dist$GDP.per.capita <- gdp.t$x.t  
+world_norm_dist$Literacy.percent <- literacy.t$x.t  
+world_norm_dist$Phones.per.1000.people <- phone.t$x.t  
+world_norm_dist$Arable.percent <- arable.t$x.t  
+world_norm_dist$Crops.percent <- crop.t$x.t  
+world_norm_dist$Other.Land.Use.percent <- other.t$x.t  
+world_norm_dist$Climate <- climate.t$x.t  
+world_norm_dist$Birthrate <- birth.t$x.t  
+world_norm_dist$Deathrate <- death.t$x.t  
+world_norm_dist$Agriculture <- agricul.t$x.t  
+```
+
+Look at the pairs.panels again.
+```{r echo=FALSE}
+pairs.panels(world_norm_dist[2:7])
+pairs.panels(world_norm_dist[8:12])
+pairs.panels(world_norm_dist[13:17])
+pairs.panels(world_norm_dist[18:22])
+pairs.panels(world_norm_dist[23:26])
+```
+
+It looks much better!
+
+Now dummy code the "Region" category for the normalized dataset since in this instance it is a predictor and not a response variable. 
+
+```{r}
+region_vars <- model.matrix( ~ Region - 1, data=world_norm_dist )
+head(region_vars[,-10])
+
+#add dummy columns -1 to the data. There is always one less columns than there are levels
+world_norm_dist <- cbind(world_norm_dist, region_vars[,-10])
+
+#do a quick spot check
+head(world_df$Region)
+```
+
+The binary dummy variables match with the actual values! Sweet. If all values are 0, this means that the region is Western Europe. This will be represented by the intercept in the regression model. 
+
+Now I am going to remove the original region column.
+```{r include=FALSE}
+world_norm_dist <- world_norm_dist[-2]
+```
+
+Remove spaces and special characters from new variable names. 
+```{r include=FALSE}
+world_norm_dist <- rename(world_norm_dist, Region.AusNZ = "RegionAustralia and New Zealand", Region.Cen.E.Eur = "RegionCentral and Eastern Europe", Region.E.Asia = "RegionEastern Asia", Region.LatCari = "RegionLatin America and Caribbean", Region.MENA = "RegionMiddle East and Northern Africa", Region.N.Amer = "RegionNorth America", Region.SE.Asia = "RegionSoutheastern Asia", Region.S.Asia = "RegionSouthern Asia", Region.SS.Africa = "RegionSub-Saharan Africa")
+```
+
+Create an easy list of predictors to pull from for the regression model. 
+```{r}
+#prepare the list of predictor names for multiple regression
+var_names <- names(world_norm_dist[3:34])
+formula <- as.formula(paste('Happiness.Score ~ ' ,paste(var_names,collapse='+')))
+
+#make sure it worked
+formula
+```
+
+I am going to build a multiple regression model with the aim of using the VIF to help with feature selection. If there are variables that explain eachother too much, I will know to remove them. Any VIF above 20 or so is considered high
+```{r}
+#make model for all features
+m1 <- lm(Happiness.Score ~ HDI.Score + Life.Expectancy.at.Birth + Expected.Years.of.Education + 
+    Mean.Years.of.Education + Gross.National.Income.per.Capita + 
+    Population + Area.sq.mi + Pop.Density.per.sq.mi + Coast.Area.Ratio + 
+    Net.migration + Infant.Mortality.per.1000.births + GDP.per.capita + 
+    Literacy.percent + Phones.per.1000.people + Arable.percent + 
+    Crops.percent + Other.Land.Use.percent + Climate + Birthrate + 
+    Deathrate + Agriculture + Industry + Service + Region.AusNZ + 
+    Region.Cen.E.Eur + Region.E.Asia + Region.LatCari + Region.MENA + 
+    Region.N.Amer + Region.SE.Asia + Region.S.Asia + Region.SS.Africa, data = world_norm_dist)
+```
+Now lets looks at the Varaince Inflation Factor numbers to get a sense of multicollinearity. 
+```{r echo=FALSE}
+#install.packages("car")
+library(car)
+
+round(vif(m1),2)
+```
+
+Here we can see that several features have very high VIFs. This signals that features explain eachother and there is multicollinearity. However, it is important to note that multicollinearity can sometimes be ignored, if the collinearity does not affect statistical significance. For example, "If your model has x, z, and xz, both x and z are likely to be highly correlated with their product. This is not something to be concerned about, however, because the p-value for xz is not affected by the multicollinearity."[___]. It is not always reason for alarm when features are derived from eachother. It makes sense that they would explain eachother, yet they don't affect p-values. 
+
+Yet, the HDI.Score VIF is extremely high. We saw high correlations earlier in the correlation matrix too. Because HDI.Score is a direct calculation from every other feature in the HDI datset, it is explain by all the other features. I am going to remove HDI.Score. 
+
+```{r include=FALSE}
+#make model for features
+m2 <- lm(Happiness.Score ~ Life.Expectancy.at.Birth + Expected.Years.of.Education + 
+    Mean.Years.of.Education + Gross.National.Income.per.Capita + 
+    Population + Area.sq.mi + Pop.Density.per.sq.mi + Coast.Area.Ratio + 
+    Net.migration + Infant.Mortality.per.1000.births + GDP.per.capita + 
+    Literacy.percent + Phones.per.1000.people + Arable.percent + 
+    Crops.percent + Other.Land.Use.percent + Climate + Birthrate + 
+    Deathrate + Agriculture + Industry + Service + Region.AusNZ + 
+    Region.Cen.E.Eur + Region.E.Asia + Region.LatCari + Region.MENA + 
+    Region.N.Amer + Region.SE.Asia + Region.S.Asia + Region.SS.Africa, data = world_norm_dist)
+```
+
+```{r echo=FALSE}
+round(vif(m2),2)
+```
+
+Now I am going to remove Area, as it's information is explained by other features such as the land usage % stats. 
+
+```{r include=FALSE}
+#make model for features
+m3 <- lm(Happiness.Score ~ Life.Expectancy.at.Birth + Expected.Years.of.Education + 
+    Mean.Years.of.Education + Gross.National.Income.per.Capita + 
+    Population + Pop.Density.per.sq.mi + Coast.Area.Ratio + 
+    Net.migration + Infant.Mortality.per.1000.births + GDP.per.capita +
+    Literacy.percent + Phones.per.1000.people + Arable.percent + 
+    Crops.percent + Other.Land.Use.percent + Climate + Birthrate + 
+    Deathrate + Agriculture + Industry + Service + Region.AusNZ + 
+    Region.Cen.E.Eur + Region.E.Asia + Region.LatCari + Region.MENA + 
+    Region.N.Amer + Region.SE.Asia + Region.S.Asia + Region.SS.Africa, data = world_norm_dist)
+```
+
+```{r echo=FALSE}
+round(vif(m3),2)
+```
+
+Agriculture, service, and indsutry are all dependent on one another, so there is no cause for alarm that their VIFs are now the highest. We are going to leave the remaining feature selection to PCA. 
+
+Principal component analysis - works best when there is high correlation between variables.. perfect!
+
+```{r echo=FALSE}
+wdata <-world_norm_dist[,-c(1,2)]
+pcal <- princomp(wdata, scores = TRUE, cor = TRUE)
+summary(pcal)
+```
+
+1st component explains 35% of variance in data, 2nd component explains 11% (cumulative 46%).
+
+Eigen values = standard deviation of PCs squared. We could use the first 5, but I'm only going to do 3
+
+All 32 components explain the full variation in the data. 
+
+
+Now let's calculate loadings. These tell us the correlations between each feature and the components. Theoretically, the features most highly correlated to the first few components are the best to use. And the features most correlated with the last components are the ones that are explained by other features.
+```{r echo=FALSE}
+#same thing
+pcal$loadings
+```
+
+
+This tells a similar story as before because HDI score is HIGHLY correlated with Component 32 (.864). Area sq mi is highly correlated with comp 31 (.673). Then agriculture would be next since it has a high correlation with Component 30. Other land use and arable percent are also multicollinear. This all makes sense logically because these features are mutually exclusive and are dependent on each others' calculated value. 
+
+DISCLAIMER: It is also important to note that Region.Western.Europe is excluded from the model since it is explained by the intercept (0 values in all other region dummies). 
+
+Let's now look at the scree plot of the eigenvalues
+```{r echo=FALSE}
+plot(pcal)
+
+screeplot(pcal, type = "line", main = "Scree Plot")
+```
+
+This shows us the importance of the first few components. 
+
+
+```{r include=FALSE}
+biplot(pcal)
+```
+
+
+Scores of the components:
+```{r echo=FALSE}
+pcal$scores[1:5,]
+```
+
+This also shows the relative importance of the different components. 
+
+I am going to start back-fitting my model using statistical significance (p-value) in order to find our final regression model to predict happiness score. The VIF analysis and PCA has led me to exclude HDI.Score and Area.sq.mi from my regression model equation. Feature removal is no small decision, but the justification behind this one is multicollinearity. The rest of the feature selection will be done by backfitting by p-value. Any feature that has a p-value of greater than 0.05 will be considered not statistically significant. 
+
+```{r include=FALSE}
+#remove HDI score and Area Sq mi
+world_norm_dist2 <- world_norm_dist[-c(3,9)]
+```
+
+Now let's make training and test datasets in order to create and evaluate our model. The division strategy I am going to use is taking a random sample without replacement. I believe this will give an unordered subset of the data that should be representative of the range of happiness scores. 
+
+```{r include=FALSE}
+#install.packages("caret")
+library(caret)
+set.seed(12)
+# y = happiness score bc it is the vector of outcomes
+#80% for training, 20% for testing
+indxTrain <- createDataPartition(y = world_norm_dist2$Happiness.Score, p = 0.80, list = FALSE)
+
+#80% of the full dataset goes to training and the rest to testing. the [-] syntax places all not-yet indexed values to the remaining set.
+world_train <- world_norm_dist2[indxTrain,]
+world_test <- world_norm_dist2[-indxTrain,]
+```
+
+```{r echo = FALSE}
+#make sure distributions are similar in traing and test
+summary(world_test$Happiness.Score)
+summary(world_train$Happiness.Score)
+```
+They look pretty similar! Let's move forward with these training and test sets. 
+
+```{r echo=FALSE}
+#make model for all features except country
+m4 <- lm(Happiness.Score ~ Life.Expectancy.at.Birth + Expected.Years.of.Education + 
+    Mean.Years.of.Education + Gross.National.Income.per.Capita + 
+    Population + Pop.Density.per.sq.mi + Coast.Area.Ratio + 
+    Net.migration + Infant.Mortality.per.1000.births + GDP.per.capita +
+    Literacy.percent + Phones.per.1000.people + Arable.percent + 
+    Crops.percent + Other.Land.Use.percent + Climate + Birthrate + 
+    Deathrate + Agriculture + Industry + Service + Region.AusNZ + 
+    Region.Cen.E.Eur + Region.E.Asia + Region.LatCari + Region.MENA + 
+    Region.N.Amer + Region.SE.Asia + Region.S.Asia + Region.SS.Africa , data = world_train)
+summary(m4)
+```
+
+Our initial Adjusted R^2 value is .8109, which is very good!!
+
+Let's remove Region Aus&NZ, as it is the highest p-value. 
+
+```{r include=FALSE}
+m5 <- lm(Happiness.Score ~ Life.Expectancy.at.Birth + Expected.Years.of.Education + 
+    Mean.Years.of.Education + Gross.National.Income.per.Capita + 
+    Population + Pop.Density.per.sq.mi + Coast.Area.Ratio + 
+    Net.migration + Infant.Mortality.per.1000.births + GDP.per.capita +
+    Literacy.percent + Phones.per.1000.people + Arable.percent + 
+    Crops.percent + Other.Land.Use.percent + Climate + Birthrate + 
+    Deathrate + Agriculture + Industry + Service + 
+    Region.Cen.E.Eur + Region.E.Asia + Region.LatCari + Region.MENA + 
+    Region.N.Amer + Region.SE.Asia + Region.S.Asia + Region.SS.Africa , data = world_train)
+summary(m5)
+```
+Now remove GDP per capita. This is a bit surprising - I would have expectd GDP to have a bigger impact. 
+
+```{r include=FALSE}
+m6 <- lm(Happiness.Score ~ Life.Expectancy.at.Birth + Expected.Years.of.Education + 
+    Mean.Years.of.Education + Gross.National.Income.per.Capita + 
+    Population + Pop.Density.per.sq.mi + Coast.Area.Ratio + 
+    Net.migration + Infant.Mortality.per.1000.births +
+    Literacy.percent + Phones.per.1000.people + Arable.percent + 
+    Crops.percent + Other.Land.Use.percent + Climate + Birthrate + 
+    Deathrate + Agriculture + Industry + Service + 
+    Region.Cen.E.Eur + Region.E.Asia + Region.LatCari + Region.MENA + 
+    Region.N.Amer + Region.SE.Asia + Region.S.Asia + Region.SS.Africa , data = world_train)
+summary(m6)
+```
+Next remove expected year of education.
+
+```{r include=FALSE}
+m7 <- lm(Happiness.Score ~ Life.Expectancy.at.Birth + 
+    Mean.Years.of.Education + Gross.National.Income.per.Capita + 
+    Population + Pop.Density.per.sq.mi + Coast.Area.Ratio + 
+    Net.migration + Infant.Mortality.per.1000.births +
+    Literacy.percent + Phones.per.1000.people + Arable.percent + 
+    Crops.percent + Other.Land.Use.percent + Climate + Birthrate + 
+    Deathrate + Agriculture + Industry + Service + 
+    Region.Cen.E.Eur + Region.E.Asia + Region.LatCari + Region.MENA + 
+    Region.N.Amer + Region.SE.Asia + Region.S.Asia + Region.SS.Africa , data = world_train)
+summary(m7)
+```
+Next remove region North America. 
+
+```{r include=FALSE}
+m8 <- lm(Happiness.Score ~ Life.Expectancy.at.Birth + 
+    Mean.Years.of.Education + Gross.National.Income.per.Capita + 
+    Population + Pop.Density.per.sq.mi + Coast.Area.Ratio + 
+    Net.migration + Infant.Mortality.per.1000.births +
+    Literacy.percent + Phones.per.1000.people + Arable.percent + 
+    Crops.percent + Other.Land.Use.percent + Climate + Birthrate + 
+    Deathrate + Agriculture + Industry + Service + 
+    Region.Cen.E.Eur + Region.E.Asia + Region.LatCari + Region.MENA + Region.SE.Asia + Region.S.Asia + Region.SS.Africa , data = world_train)
+summary(m8)
+```
+Next remove region South Asia.
+
+```{r include=FALSE}
+m9 <- lm(Happiness.Score ~ Life.Expectancy.at.Birth + 
+    Mean.Years.of.Education + Gross.National.Income.per.Capita + 
+    Population + Pop.Density.per.sq.mi + Coast.Area.Ratio + 
+    Net.migration + Infant.Mortality.per.1000.births +
+    Literacy.percent + Phones.per.1000.people + Arable.percent + 
+    Crops.percent + Other.Land.Use.percent + Climate + Birthrate + 
+    Deathrate + Agriculture + Industry + Service + 
+    Region.Cen.E.Eur + Region.E.Asia + Region.LatCari + Region.MENA + Region.SE.Asia + Region.SS.Africa , data = world_train)
+summary(m9)
+```
+Next remove infant mortality. 
+
+```{r include=FALSE}
+m10 <- lm(Happiness.Score ~ Life.Expectancy.at.Birth + 
+    Mean.Years.of.Education + Gross.National.Income.per.Capita + 
+    Population + Pop.Density.per.sq.mi + Coast.Area.Ratio + 
+    Net.migration + Literacy.percent + Phones.per.1000.people + Arable.percent + Crops.percent + Other.Land.Use.percent + Climate + Birthrate + Deathrate + Agriculture + Industry + Service + 
+    Region.Cen.E.Eur + Region.E.Asia + Region.LatCari + Region.MENA + Region.SE.Asia + Region.SS.Africa , data = world_train)
+summary(m10)
+```
+Next remove region Sub-saharan Africa. 
+
+```{r include=FALSE}
+m11 <- lm(Happiness.Score ~ Life.Expectancy.at.Birth + 
+    Mean.Years.of.Education + Gross.National.Income.per.Capita + 
+    Population + Pop.Density.per.sq.mi + Coast.Area.Ratio + 
+    Net.migration + Literacy.percent + Phones.per.1000.people + Arable.percent + Crops.percent + Other.Land.Use.percent + Climate + Birthrate + Deathrate + Agriculture + Industry + Service + 
+    Region.Cen.E.Eur + Region.E.Asia + Region.LatCari + Region.MENA + Region.SE.Asia , data = world_train)
+summary(m11)
+```
+
+Next remove service. 
+
+```{r include=FALSE}
+m12 <- lm(Happiness.Score ~ Life.Expectancy.at.Birth + 
+    Mean.Years.of.Education + Gross.National.Income.per.Capita + 
+    Population + Pop.Density.per.sq.mi + Coast.Area.Ratio + 
+    Net.migration + Literacy.percent + Phones.per.1000.people + Arable.percent + Crops.percent + Other.Land.Use.percent + Climate + Birthrate + Deathrate + Agriculture + Industry + Region.Cen.E.Eur + Region.E.Asia + Region.LatCari + Region.MENA + Region.SE.Asia , data = world_train)
+summary(m12)
+```
+Next remove industry.
+```{r include=FALSE}
+m13 <- lm(Happiness.Score ~ Life.Expectancy.at.Birth + 
+    Mean.Years.of.Education + Gross.National.Income.per.Capita + 
+    Population + Pop.Density.per.sq.mi + Coast.Area.Ratio + 
+    Net.migration + Literacy.percent + Phones.per.1000.people + Arable.percent + Crops.percent + Other.Land.Use.percent + Climate + Birthrate + Deathrate + Agriculture + Region.Cen.E.Eur + Region.E.Asia + Region.LatCari + Region.MENA + Region.SE.Asia , data = world_train)
+summary(m13)
+```
+Next remove population density. 
+
+```{r include=FALSE}
+m14 <- lm(Happiness.Score ~ Life.Expectancy.at.Birth + 
+    Mean.Years.of.Education + Gross.National.Income.per.Capita + 
+    Population + Coast.Area.Ratio + Net.migration + Literacy.percent + Phones.per.1000.people + Arable.percent + Crops.percent + Other.Land.Use.percent + Climate + Birthrate + Deathrate + Agriculture + Region.Cen.E.Eur + Region.E.Asia + Region.LatCari + Region.MENA + Region.SE.Asia , data = world_train)
+summary(m14)
+```
+Next remove crops percent. 
+
+```{r include=FALSE}
+m15 <- lm(Happiness.Score ~ Life.Expectancy.at.Birth + 
+    Mean.Years.of.Education + Gross.National.Income.per.Capita + 
+    Population + Coast.Area.Ratio + Net.migration + Literacy.percent + Phones.per.1000.people + Arable.percent + Other.Land.Use.percent + Climate + Birthrate + Deathrate + Agriculture + Region.Cen.E.Eur + Region.E.Asia + Region.LatCari + Region.MENA + Region.SE.Asia , data = world_train)
+summary(m15)
+```
+Next remove literacy percent. 
+
+```{r include=FALSE}
+m16 <- lm(Happiness.Score ~ Life.Expectancy.at.Birth + 
+    Mean.Years.of.Education + Gross.National.Income.per.Capita + 
+    Population + Coast.Area.Ratio + Net.migration + Phones.per.1000.people + Arable.percent + Other.Land.Use.percent + Climate + Birthrate + Deathrate + Agriculture + Region.Cen.E.Eur + Region.E.Asia + Region.LatCari + Region.MENA + Region.SE.Asia , data = world_train)
+summary(m16)
+```
+Next remove net migration. 
+
+```{r include=FALSE}
+m17 <- lm(Happiness.Score ~ Life.Expectancy.at.Birth + 
+    Mean.Years.of.Education + Gross.National.Income.per.Capita + 
+    Population + Coast.Area.Ratio + Phones.per.1000.people + Arable.percent + Other.Land.Use.percent + Climate + Birthrate + Deathrate + Agriculture + Region.Cen.E.Eur + Region.E.Asia + Region.LatCari + Region.MENA + Region.SE.Asia , data = world_train)
+summary(m17)
+```
+Next remove population. 
+```{r include=FALSE}
+m18 <- lm(Happiness.Score ~ Life.Expectancy.at.Birth + 
+    Mean.Years.of.Education + Gross.National.Income.per.Capita+ Coast.Area.Ratio + Phones.per.1000.people + Arable.percent + Other.Land.Use.percent + Climate + Birthrate + Deathrate + Agriculture + Region.Cen.E.Eur + Region.E.Asia + Region.LatCari + Region.MENA + Region.SE.Asia , data = world_train)
+summary(m18)
+```
+Next remove birthrate. 
+
+```{r include=FALSE}
+m19 <- lm(Happiness.Score ~ Life.Expectancy.at.Birth + 
+    Mean.Years.of.Education + Gross.National.Income.per.Capita+ Coast.Area.Ratio + Phones.per.1000.people + Arable.percent + Other.Land.Use.percent + Climate + Deathrate + Agriculture + Region.Cen.E.Eur + Region.E.Asia + Region.LatCari + Region.MENA + Region.SE.Asia , data = world_train)
+summary(m19)
+```
+Next remove climate. 
+
+```{r include=FALSE}
+m20 <- lm(Happiness.Score ~ Life.Expectancy.at.Birth + 
+    Mean.Years.of.Education + Gross.National.Income.per.Capita+ Coast.Area.Ratio + Phones.per.1000.people + Arable.percent + Other.Land.Use.percent + Deathrate + Agriculture + Region.Cen.E.Eur + Region.E.Asia + Region.LatCari + Region.MENA + Region.SE.Asia , data = world_train)
+summary(m20)
+```
+Next remove region SE Asia. 
+
+```{r include=FALSE}
+m21 <- lm(Happiness.Score ~ Life.Expectancy.at.Birth + 
+    Mean.Years.of.Education + Gross.National.Income.per.Capita+ Coast.Area.Ratio + Phones.per.1000.people + Arable.percent + Other.Land.Use.percent + Deathrate + Agriculture + Region.Cen.E.Eur + Region.E.Asia + Region.LatCari + Region.MENA , data = world_train)
+summary(m21)
+```
+
+Next remove phones per 100 people. 
+
+```{r include=FALSE}
+m22 <- lm(Happiness.Score ~ Life.Expectancy.at.Birth + 
+    Mean.Years.of.Education + Gross.National.Income.per.Capita+ Coast.Area.Ratio + Arable.percent + Other.Land.Use.percent + Deathrate + Agriculture + Region.Cen.E.Eur + Region.E.Asia + Region.LatCari + Region.MENA , data = world_train)
+summary(m22)
+```
+Next remove arable percent. 
+
+```{r include=FALSE}
+m23 <- lm(Happiness.Score ~ Life.Expectancy.at.Birth + 
+    Mean.Years.of.Education + Gross.National.Income.per.Capita+ Coast.Area.Ratio + Other.Land.Use.percent + Deathrate + Agriculture + Region.Cen.E.Eur + Region.E.Asia + Region.LatCari + Region.MENA , data = world_train)
+summary(m23)
+```
+Next remove deathrate.
+
+```{r include=FALSE}
+m24 <- lm(Happiness.Score ~ Life.Expectancy.at.Birth + 
+    Mean.Years.of.Education + Gross.National.Income.per.Capita+ Coast.Area.Ratio + Other.Land.Use.percent + Agriculture +Region.Cen.E.Eur + Region.E.Asia + Region.LatCari + Region.MENA , data = world_train)
+summary(m24)
+```
+Next remove region Middles East and North Africa.
+
+```{r include=FALSE}
+m25 <- lm(Happiness.Score ~ Life.Expectancy.at.Birth + 
+    Mean.Years.of.Education + Gross.National.Income.per.Capita+ Coast.Area.Ratio + Other.Land.Use.percent + Agriculture +Region.Cen.E.Eur + Region.E.Asia + Region.LatCari , data = world_train)
+summary(m25)
+```
+
+Final model:
+```{r}
+m.mlreg <- lm(Happiness.Score ~ Life.Expectancy.at.Birth + 
+    Mean.Years.of.Education + Gross.National.Income.per.Capita+ Coast.Area.Ratio+ Agriculture +Region.Cen.E.Eur + Region.E.Asia + Region.LatCari , data = world_train)
+summary(m.mlreg)
+```
+
+Now all of our features are statistically significant! For good measure, I will also be demonstrating automatically building a final model using the step function. This model does feature selection based on the Akaike information criterion (AIC). This is a way of measuring information gained to the prediction from each feature. Not every feature is always statistically significant when using AIC, however. Let's compare models. 
+
+```{r}
+#make model based on AIC minus HDI.score and area.sq.mi
+m.step <- step(lm(Happiness.Score ~ Life.Expectancy.at.Birth + Expected.Years.of.Education + 
+    Mean.Years.of.Education + Gross.National.Income.per.Capita + 
+    Population + Pop.Density.per.sq.mi + Coast.Area.Ratio + 
+    Net.migration + Infant.Mortality.per.1000.births + GDP.per.capita +
+    Literacy.percent + Phones.per.1000.people + Arable.percent + 
+    Crops.percent + Other.Land.Use.percent + Climate + Birthrate + 
+    Deathrate + Agriculture + Industry + Service + Region.AusNZ + 
+    Region.Cen.E.Eur + Region.E.Asia + Region.LatCari + Region.MENA + 
+    Region.N.Amer + Region.SE.Asia + Region.S.Asia + Region.SS.Africa, data = world_train), trace = 0)
+
+m.step
+```
+It looks like the features are pretty similar. The AIC method kept more features, though. 
+
+I am going to treat the p-value model as our final one.
+
+I am going to make a multiple regression model based on the factors: 
+
+Life.Expectancy.at.Birth,
+Mean.Years.of.Education,
+Gross.National.Income.per.Capita,
+Coast.Area.Ratio, 
+Agriculture, 
+Region.Cen.E.Eur,
+Region.E.Asia, 
+Region.LatCari. 
+
+I chose these because I think they will be useful in determining a nation's happiness score, they are relevant to our objective, and all are statistically signifcant. 
+
+Some interesting things to note already. It seems the region in the world has a big imapct on happineess, as does some human development indicators such as life expectancy, gross national income, etc.
+
+It is important to note that the subset of countries chose by our dataPartition has a big impact on the significance found in features. Different subsets will likely yield different significant features. 
+
+
+```{r include=FALSE}
+#model summary again
+summary(m.mlreg)
+```
+The residuals tell us how much our fitted values are off of actual values for each case. The majority of the cases are pretty good. Our median residual is only 0.05.
+
+The multiple R squared values, which is also known as the coefficient of determination tells us how well the model overall explains the values of the dependent/response variable. Our model explains about 83% of the variation in happiness score.
+
+The Adjusted R squared of the model is .81, which is relatively high to start with. This means that the selected features of the multiple regression equation explain the variations in the happiness score data fairly well. R squared is a measure of fit, and the closer to 1 the stonger the fit. .81 is fairly high, but this number could be improved by in a variety of ways such as adding non-linear relationships or converting some numeric variables to a binary indicator.
+
+The standard error of 0.507 could be used later to calculate confidence intervals. This tells us the standard error of the model between fitted and actual values.
+
+The p-value indicates statistical significance. The higher the p-value the more likely something can be attributed to chance. We are looking for very low p-values to make for a stronger model. All of our principal components (features) that make up our model are statistically significant. Gross national income has a p-value of 3.2e-7, which indicates very high statistical significance. This variable's impact on happiness score is not due to random chance. The same applies to the others.
+
+The overall p-value for the model is 2.2e-16. This means that the overall model statistical significance is very high, which is a good sign. 
+
+```{r echo = FALSE}
+m.mlreg
+```
+The final linear regression equation is: 
+y = 5.7989053 + (Life.Expectancy.at.Birth)1.288 + (Mean.Years.of.Education)0.4783527 +  (Gross.National.Income.per.Capita)0.7587606 - (Coast.Area.Ratio)0.1486733 + (Agriculture)0.3677959 - (Region.Cen.E.Eur)0.7637579 - (Region.E.Asia)0.7769728 + (Region.LatCari)0.8133442. 
+
+This tells us, on average, how much each unit change in one of the features will impact the end result happiness score. For example, If a nation is in the Central/East Europe region, the happiness score will decrease by, on average, 0.763. Remember that some of these values were transformed, and must be reverted back in order to get the actual happiness score. 
+
+
+Now let's try to evaluate our model using plot to derive some insights.
+```{r echo=FALSE}
+plot(m.mlreg)
+```
+Residuals vs. fitted:
+This helps us to detect non-linearity if the line is parabolic. Our line is a bit curved, but not entirely. This suggests there may be some linear regression features that could be described in a non-linear fashion. Also, all the labeled points are considered outliers, so this plot is helpful in identifying additional ones. Lastly, if the plot was in the shape of a funnel (which it is not), it would indicate heteroskedasticity. We could fix this problems with some form of dist transform such as log or sqrt. 
+
+Normal Q-Q:
+The more straight line in the Q-Q plot, the better. The majority of the points follow a straight line, but toward the beginning and end there's a very slight deviation. The more straight the line the more normally distributed the data. This linearity could be fixed with a non-linear transform if needed, but it looks very very good! Our transforms helped to make the data more normally distributed.
+
+Scale-Location:
+
+If there is no discernable patter in this plot it means it is good. I can't detect a pattern, meaning we don't have to fix it's non-linearity or heteroskedasticity. 
+
+Residuals vs Leverage:
+
+The labeled points indicate additional outliers with a lot of leverage (they skew the model). These could theoretically be removed to help improve our model.
+
+
+Now let's calculate the RMSE for this model on the training data. 
+```{r echo=FALSE}
+#calculate RMSE by squaring the residuals to make them positive then taking the square root
+RMSE <- sqrt(mean((m.mlreg$residuals)^2))
+RMSE
+```
+
+The RMSE of this model is `r RMSE`. Which isn't the most meaningful on it's own but would be more meaningful when compared to other models. However, this is saying that on average, the square error between actual and predicted squared is `r RMSE` for happiness score.
+
+Let's also calculate the Mean Absolute Error. This is also a measure of fit and accuracy of a regression model.
+
+```{r echo=FALSE}
+#calculate the MAE
+aaa <- mean(abs(m.mlreg$residuals))
+```
+This is saying that on average the predicted value from the regression model is `r aaa` off the actual value. This seems very good! 
+
+These are both against the same data it was tested on, so let's also evaluate this regression model against the test data with the holdout method. 
+
+```{r echo=FALSE}
+pred.mlreg <- predict(m.mlreg, world_test)
+
+#explore relationship
+cor(pred.mlreg, world_test$Happiness.Score)
+plot(pred.mlreg, world_test$Happiness.Score)
+```
+
+85% correlation is pretty good! I will determine the best model later on. 
+Let's look at our confidence interval for each prediction. 
+
+```{r echo=FALSE}
+#Check prediction intervals
+pred_intervals <- predict(m.mlreg, world_test, interval = "confidence")   
+head(pred_intervals)
+```
+Here we can see the lower and upper limits of the 95% confidence interval for each prediction of this statistical linear model. 
+
+# Regression Tree
+
+Next I will build a decision tree for regression to try to predict happiness score of a nation.
+
+I am using tree structure for this ML task because it offers transparent insight into the process. It will be very helpful for the to know what contributes to happy nation. 
+
+Install the rpart package for regression trees
+```{r include=FALSE}
+#install.packages("rpart")
+library(rpart)
+```
+
+Train the rpart model. We do not need to use the normally distributed data for this, so I will be making new train/test sets. 
+
+
+```{r include=FALSE}
+set.seed(12)
+# y = happiness score bc it is the vector of outcomes
+#80% for training, 20% for testing
+indxTrain2 <- createDataPartition(y = world_df$Happiness.Score, p = 0.80, list = FALSE)
+
+#80% of the full dataset goes to training and the rest to testing. the [-] syntax places all not-yet indexed values to the remaining set.
+world_train2 <- world_df[indxTrain2,]
+world_test2 <- world_df[-indxTrain2,]
+
+#make sure distributions are similar in traing and test
+summary(world_test2$Happiness.Score)
+summary(world_train2$Happiness.Score)
+```
+
+```{r echo=FALSE}
+#use rpart to train reg tree model
+m.regtree <- rpart(Happiness.Score ~ Region + Life.Expectancy.at.Birth + Expected.Years.of.Education + 
+    Mean.Years.of.Education + Gross.National.Income.per.Capita + 
+    Population + Pop.Density.per.sq.mi + Coast.Area.Ratio + 
+    Net.migration + Infant.Mortality.per.1000.births + GDP.per.capita +
+    Literacy.percent + Phones.per.1000.people + Arable.percent + 
+    Crops.percent + Other.Land.Use.percent + Climate + Birthrate + 
+    Deathrate + Agriculture + Industry + Service, data = world_train2)
+#print it out
+m.regtree
+```
+
+This output shows the logic behind the tree. For example, any line with a * indicates a terminal node. A country with life expectancy < 69.8, literacy percent < 86.8, and GNI <3539 will be predicted to have a happiness score of 3.86.
+
+
+```{r include=FALSE}
+#install.packages("rpart.plot")
+library(rpart.plot)
+```
+
+```{r include=FALSE}
+#Create visual
+rpart.plot(m.regtree, digits = 3, tweak = 1.8)
+```
+
+
+Let's see what the most important variables are. 
+
+```{r}
+m.regtree$variable.importance
+```
+Infant mortality, life expectancy, and region are the three most important. Not too far off from the multiple linear regression model!
+
+Now let's evaluate the tree performance using the predict() function. 
+
+```{r echo=FALSE}
+#prediction on validation data
+pred.regtree <- predict(m.regtree, world_test2)
+
+#check it out - quick comparison
+summary(pred.regtree)
+summary(world_test2$Happiness.Score)
+```
+These quantiles show that our model is predicting pretty closely.
+
+Let's check our the correlation between our prediction and the actuals. 
+```{r echo=FALSE}
+#explore relationship
+cor(pred.regtree, world_test2$Happiness.Score)
+plot(pred.regtree, world_test2$Happiness.Score)
+```
+Correlation of .877 is pretty strong! It gives us some idea that our model predicitons aren't too far off actual values. 
+
+But now let's measure regression tree model performance using an error metric - Mean Absolute Error.
+
+```{r echo=FALSE}
+#create a function that takes in actual and predicted values and calculates the MAE
+MAE <- function(actual, predicted) {
+mean(abs(actual - predicted))
+}
+```
+Let's try it out!
+```{r echo=FALSE}
+#Calculate MAE
+MAE(pred.regtree, world_test2$Happiness.Score)
+```
+The MAE is `r MAE(pred.regtree, world_test2$Happiness.Score)`. This isn't super meaningful until we have a reference to compare it to (another model). However, this does tell us that on average our model is `r MAE(pred.regtree, world_test2$Happiness.Score)` happiness score away from the actual value.
+
+Let's find the MAE if we compared each case to the mean quality value instead of our model. Is our model better than just guessing the mean?
+
+```{r echo=FALSE}
+#avg of happiness
+avg <- mean(world_test2$Happiness.Score)
+#check it out
+MAE(avg, world_test2$Happiness.Score)
+```
+The MAE in this instance is `r MAE(avg, world_test2$Happiness.Score)`, so my model is definitely better than only guessing the mean. 
+
+Now it is time to improve our model's performance by using a model tree. This replaces leaf nodes with regression models. 
+
+```{r echo=FALSE}
+#install.packages("RWeka")
+library(RWeka)
+m.regtree2 <- M5P(Happiness.Score ~ Region + Life.Expectancy.at.Birth + Expected.Years.of.Education + 
+    Mean.Years.of.Education + Gross.National.Income.per.Capita + 
+    Population + Pop.Density.per.sq.mi + Coast.Area.Ratio + 
+    Net.migration + Infant.Mortality.per.1000.births + GDP.per.capita +
+    Literacy.percent + Phones.per.1000.people + Arable.percent + 
+    Crops.percent + Other.Land.Use.percent + Climate + Birthrate + 
+    Deathrate + Agriculture + Industry + Service, data = world_train2, control=Weka_control(R=TRUE))
+```
+
+Examine the tree
+
+```{r}
+m.regtree2
+```
+
+The LM leaf nodes are the linear models for given conditions/route through a tree. This helps to increase model performance rather than just predicting one value for a whole class.
+
+Let's see if it actual performs better on the test data.
+
+```{r echo=FALSE}
+#predict on validation data
+pred.regtree2 <- predict(m.regtree2, world_test2)
+```
+
+Let's see if the new model is predicting a wider range of values
+
+```{r echo=FALSE}
+summary(pred.regtree2)
+```
+Look's like the predictions are actually missing the very happy and very unhappy countries. The range is not very wide. 
+
+```{r echo=FALSE}
+#check correlation
+cor(pred.regtree2, world_test2$Happiness.Score)
+```
+
+The correlation is lower now as a result. 
+
+```{r echo=FALSE}
+#check MAE
+MAE(world_test2$Happiness.Score, pred.regtree2)
+```
+
+The MAE is worse too. So overall, the new model tree model doesn't perform as well as the plain regression tree model, but not by much.
+
+# Neural Network
+
+Neural Networks tend to work best with values scaled to around 0. Let's normalize the data. I will be using the standard range of 0-1, so I will be dummy coding the region category, as well. 
+
+```{r include=FALSE}
+world_standard <- world_df
+
+#add dummy coded region columns
+world_standard <- cbind(world_standard,region_vars[,-10])
+#remove unused columns
+world_standard <- world_standard[-c(1,2,4,10)]
+```
+
+Now apply the normalize function to every row of the world dataset. 
+
+```{r}
+world_standard <- as.data.frame(lapply(world_standard, normalize))
+```
+
+Check to make sure it works. 
+
+```{r echo=FALSE}
+#normalized
+summary(world_standard$Happiness.Score)
+#original 
+summary(world_df$Happiness.Score)
+```
+It works!
+
+Now lets make train and test sets. 80% to training and 20% to testing. 
+
+```{r echo=FALSE}
+set.seed(12)
+# y = happiness score bc it is the vector of outcomes
+#80% for training, 20% for testing
+indxTrain3 <- createDataPartition(y = world_standard$Happiness.Score, p = 0.80, list = FALSE)
+
+#80% of the full dataset goes to training and the rest to testing. the [-] syntax places all not-yet indexed values to the remaining set.
+world_train3 <- world_standard[indxTrain3,]
+world_test3 <- world_standard[-indxTrain3,]
+
+#make sure distributions are similar in traing and test
+summary(world_test3$Happiness.Score)
+summary(world_train3$Happiness.Score)
+```
+
+The distribution of happiness scores between the two sets is pretty similar!
+
+Now our two sets are created. We have to be careful about overfitting!
+
+I am going to use the neuralnet package to implement this NN.
+
+```{r include=FALSE}
+#install.packages("neuralnet")
+library(neuralnet)
+```
+
+Now let's train our model. 
+
+Create an easy list of predictors to pull from for the neural net (nn) model. 
+```{r echo=FALSE}
+#prepare the list of predictor names for multiple regression
+var_names2 <- names(world_standard[2:31])
+formula2 <- as.formula(paste('Happiness.Score ~ ' ,paste(var_names2,collapse='+')))
+
+#make sure it worked
+formula2
+```
+
+```{r}
+m.nn <- neuralnet(formula2, data = world_train3)
+```
+
+Let's visualize the model to help our understanding.
+
+```{r echo=FALSE}
+plot(m.nn)
+```
+
+This NN with only 1 node in the hidden layer is similar to a regression model. 
+
+Now let's evaluate the model performance. 
+
+```{r echo=FALSE}
+m.nn_results <- compute(m.nn, world_test3[2:31])
+
+#see results 
+pred.nn <- m.nn_results$net.result
+```
+
+We can't use a confusion matrix since this is not a classification problem. So let's instead measure the correlation between the actual strength and predicted strength. 
+
+```{r echo=FALSE}
+#find correlation
+cor(pred.nn, world_test3$Happiness.Score)
+```
+
+`r cor(pred.nn, world_test3$Happiness.Score)` is a pretty strong correlation!  
+
+Now let's try to improve model performance. Let's tune the model by increasing the number of hidden nodes to 5.
+
+```{r echo=FALSE}
+set.seed(12)
+#new model with hidden layer having 5 nodes
+m.nn2 <- neuralnet(formula2, data = world_train3, hidden = 5)
+
+#visualize model 
+plot(m.nn2)
+```
+Now let's see if it actually did improve. 
+
+
+```{r echo=FALSE}
+m.nn2_results <- compute(m.nn2, world_test3[2:31])
+
+#see results 
+pred.nn2 <- m.nn2_results$net.result
+
+#see correlation
+cor(pred.nn2, world_test3$Happiness.Score)
+```
+Adding 5 hidden nodes actually made the prediction performance go down to `r cor(pred.nn2, world_test3$Happiness.Score)`. The added complexity did not help the model. Different random seeds will have varying results. 
+
+```{r cor(pred.nn2, world_test3$Happiness.Score)}
+#create a data frame that compares predicted values to actual values
+results <- data.frame(actual = world_test3$Happiness.Score, prediction = m.nn_results$net.result)
+```
+
+
+```{r}
+#show a sample of actual vs. predicted
+round(results[1:10,],2)
+```
+here we can see the differences between actual and predicted values. Some of them are much closer than others. 
+
+# k-Nearest Neighbors
+
+Though I believe my data has a dimensionality that is too high for kNN to be super effective, let's test it out and see. You never know! Since kNN relies on distance measure to find nearest neighbors, the data must be standardized. I am going to use the same world_standard data that we used for the neural network. 
+
+Because our target variable (Happiness.Score) is continuous, we can't use typical kNN classification. Let's use kNN regression instead. We have to average out the k nearest neighbors in order to arrive at a predicted value on a continuous scale.
+
+I am choosing to use the caret package "knnreg" method. This is used to "return the average value for the neighbours," as opposed to giving you the mode of a categorical variable among the neighbors.
+
+In order to properly train and validate the kNN, I must remove the target colum from the data we use for training/testing.
+
+```{r include=FALSE}
+#remove happiness score column
+world_train4 <- world_train3[-1]
+world_test4 <- world_test3[-1]
+```
+
+I am choosing to start with k = 11 because that is close to the square root of `r nrow(world_train4)`, which is the size of the cases in the training data set. In practice, it would be necessary to try several different values of k in order to arrive at the best one. In this instance, I made the decision to just predict using the k=11. 
+
+kNNregTrain is a modification of the "knn" function in the class package.
+train dictates what the training data set is, while test dictates the test dataset.
+y refers to what is the target vector in which the knn algorithm can learn patterns and average out neighbors using the training dataset.
+k is the number of nearest neighbors analyzed (find distance for).
+```{r echo=FALSE}
+#Make vector of all test prices
+train3.scores <- world_train3[,1]
+test3.scores <- world_test3[,1]
+#this trains the knnreg function on the training data set
+pred.knnreg <- knnregTrain(train = world_train4, test = world_test4, y = train3.scores, k= 11)
+
+#initial comparison between our model and the test data fram prices
+head(cbind(test3.scores, pred.knnreg))
+```
+This shows that the predictions are actually quite good. When one is on the high end, so is the prediction, even though the values don't match up exactly. 
+
+
+# Comparison of all models
+
+Though I did some preliminary evaluation earlier with the holdout method, I am now going to compare all models using 10-fold Cross Validation. This will be especially helpful given the size of my dataset. I will compare the Mean Absolute Error (MAE) and Root Mean Square Error (RMSE) of the 6 models I made. These models are Multiple Linear Regression (m.mlreg), Regression Tree(m.regtree), Regression Tree with linear models at each terminal node (m.regtree2), Neural Networks with 1 hidden node (m.nn), Neural Networks with 5 hidden nodes (m.nn2), and k-nearest neighbors regression (m.knnreg).
+
+
+
+```{r include=FALSE}
+#create a function that takes in actual and predicted values and calculates the MAE
+MAE <- function(actual, predicted) {
+mean(abs(actual - predicted))
+}
+```
+
+```{r include=FALSE}
+#create a function that takes in actual and predicted values and calculates the RMSE
+RMSE <- function(actual, predicted) {
+sqrt(mean(((actual - predicted)^2)))
+}
+```
+
+
+```{r echo=FALSE}
+## Automating 10-fold CV for each model using lapply() ----
+#multiple linear regression
+set.seed(12)
+
+#create folds for cv
+folds <- createFolds(world_norm_dist2$Happiness.Score, k = 10)
+
+#first apply the model to predict for each fold, then apply the error calculations
+cv_mlreg <- lapply(folds, function(x) {
+  nations_train <- world_norm_dist2[-x, ]
+  
+  nations_test <- world_norm_dist2[x, ]
+
+  nations_model <- lm(Happiness.Score ~ Life.Expectancy.at.Birth + 
+    Mean.Years.of.Education + Gross.National.Income.per.Capita+ Coast.Area.Ratio+ Agriculture +Region.Cen.E.Eur + Region.E.Asia + Region.LatCari , data = nations_train)
+  
+  nations_pred <- predict(nations_model, nations_test)
+  nations_actual <- nations_test$Happiness.Score
+  
+  MAE <- MAE(nations_actual, nations_pred)
+  RMSE <- RMSE(nations_actual, nations_pred)
+  
+  
+  error <- rbind("MAE" = MAE, "RMSE" = RMSE)
+  return(error)
+})
+
+#print out the MAE and RMSE for every fold
+cv_mlreg <- as.data.frame(t(as.data.frame(cv_mlreg)))
+cv_mlreg
+#average MAE
+mae_mlreg <- mean(cv_mlreg$MAE)
+mae_mlreg
+#average RMSE
+rmse_mlreg <- mean(cv_mlreg$RMSE)
+rmse_mlreg
+```
+The average MAE between the 10 folds for the Multiple Linear Regression Model is `r mae_mlreg` and the average RMSE is `r rmse_mlreg`. 
+
+Now let's look at the first regression tree model. 
+
+```{r echo=FALSE}
+## Automating 10-fold CV for each model using lapply() ----
+#regression tree model 1
+set.seed(12)
+
+#create folds for cv
+folds2 <- createFolds(world_df$Happiness.Score, k = 10)
+
+#first apply the model to predict for each fold, then apply the error calculations
+cv_regtree <- lapply(folds2, function(x) {
+  nations_train <- world_df[-x, ]
+  
+  nations_test <- world_df[x, ]
+
+  nations_model <- rpart(Happiness.Score ~ Region + Life.Expectancy.at.Birth + Expected.Years.of.Education + 
+    Mean.Years.of.Education + Gross.National.Income.per.Capita + 
+    Population + Pop.Density.per.sq.mi + Coast.Area.Ratio + 
+    Net.migration + Infant.Mortality.per.1000.births + GDP.per.capita +
+    Literacy.percent + Phones.per.1000.people + Arable.percent + 
+    Crops.percent + Other.Land.Use.percent + Climate + Birthrate + 
+    Deathrate + Agriculture + Industry + Service, data = nations_train)
+  
+  nations_pred <- predict(nations_model, nations_test)
+  nations_actual <- nations_test$Happiness.Score
+  
+  MAE <- MAE(nations_actual, nations_pred)
+  RMSE <- RMSE(nations_actual, nations_pred)
+  
+  
+  error <- rbind("MAE" = MAE, "RMSE" = RMSE)
+  return(error)
+})
+
+#print out the MAE and RMSE for every fold
+cv_regtree <- as.data.frame(t(as.data.frame(cv_regtree)))
+cv_regtree
+#average MAE
+mae_regtree <- mean(cv_regtree$MAE)
+mae_regtree
+#average RMSE
+rmse_regtree <-mean(cv_regtree$RMSE)
+rmse_regtree
+```
+The average MAE between the 10 folds for the Regression Tree Model is `r mae_regtree` and the average RMSE is `r rmse_regtree`. 
+
+Now let's look at the second regression tree model. 
+
+```{r echo=FALSE}
+## Automating 10-fold CV for each model using lapply() ----
+#regression tree model 2
+set.seed(12)
+
+#first apply the model to predict for each fold, then apply the error calculations
+cv_regtree2 <- lapply(folds2, function(x) {
+  nations_train <- world_df[-x, ]
+  
+  nations_test <- world_df[x, ]
+
+  nations_model <- M5P(Happiness.Score ~ Region + Life.Expectancy.at.Birth + Expected.Years.of.Education + 
+    Mean.Years.of.Education + Gross.National.Income.per.Capita + 
+    Population + Pop.Density.per.sq.mi + Coast.Area.Ratio + 
+    Net.migration + Infant.Mortality.per.1000.births + GDP.per.capita +
+    Literacy.percent + Phones.per.1000.people + Arable.percent + 
+    Crops.percent + Other.Land.Use.percent + Climate + Birthrate + 
+    Deathrate + Agriculture + Industry + Service, data = nations_train, control=Weka_control(R=TRUE))
+  
+  nations_pred <- predict(nations_model, nations_test)
+  nations_actual <- nations_test$Happiness.Score
+  
+  MAE <- MAE(nations_actual, nations_pred)
+  RMSE <- RMSE(nations_actual, nations_pred)
+  
+  
+  error <- rbind("MAE" = MAE, "RMSE" = RMSE)
+  return(error)
+})
+
+#print out the MAE and RMSE for every fold
+cv_regtree2 <- as.data.frame(t(as.data.frame(cv_regtree2)))
+cv_regtree2
+#average MAE
+mae_regtree2 <- mean(cv_regtree2$MAE)
+mae_regtree2
+#average RMSE
+rmse_regtree2 <- mean(cv_regtree2$RMSE)
+rmse_regtree2
+```
+The average MAE between the 10 folds for the Regression Tree Model is `r mae_regtree2` and the average RMSE is `r rmse_regtree2`. 
+
+Now let's look at the first neural network.
+
+The predictions are normalized, so we have to reverse this. 
+```{r include=FALSE}
+#unnormalize columns with reverse min-max normalization by creating a function that takes in two arguments "y"  and "x". y is the normalized value and x is the original vector. 
+#Then, it unnormalizes previously between 0-1 values 
+unnormalize <- function(y, x) {
+  return((y*(diff(range(x))))+min(x))
+}
+```
+
+```{r echo=FALSE}
+## Automating 10-fold CV for each model using lapply() ----
+#neural network model 1
+set.seed(12)
+
+#create folds for cv
+folds3 <- createFolds(world_standard$Happiness.Score, k = 10)
+
+#first apply the model to predict for each fold, then apply the error calculations
+cv_nn <- lapply(folds3, function(x) {
+  nations_train <- world_standard[-x, ]
+  
+  nations_test <- world_standard[x, ]
+
+  nations_model <- neuralnet(formula2, data = nations_train)
+  #use compute for neuralnet package
+  nations_results <- compute(nations_model, nations_test[2:31])
+
+  nations_pred <- nations_results$net.result
+  nations_actual <- nations_test$Happiness.Score
+  
+  #remember that predictions were normalized
+  MAE <- MAE(unnormalize(nations_actual,world_df$Happiness.Score),unnormalize(nations_pred,world_df$Happiness.Score))
+  RMSE <- RMSE(unnormalize(nations_actual,world_df$Happiness.Score),unnormalize(nations_pred,world_df$Happiness.Score))
+  
+  error <- rbind("MAE" = MAE, "RMSE" = RMSE)
+  return(error)
+})
+
+#print out the MAE and RMSE for every fold
+cv_nn <- as.data.frame(t(as.data.frame(cv_nn)))
+cv_nn
+#average MAE
+mae_nn <- mean(cv_nn$MAE)
+mae_nn
+#average RMSE
+rmse_nn <-mean(cv_nn$RMSE)
+rmse_nn
+```
+This neural network model gives an average MAE of `r mae_nn` and an average RMSE of `r rmse_nn`.
+
+Now let's look at the second neural network. This one has 5 nodes in the hidden layer.  
+
+```{r echo=FALSE}
+## Automating 10-fold CV for each model using lapply() ----
+#neural network model 2
+set.seed(12)
+
+#first apply the model to predict for each fold, then apply the error calculations
+cv_nn2 <- lapply(folds3, function(x) {
+  nations_train <- world_standard[-x, ]
+  
+  nations_test <- world_standard[x, ]
+
+  nations_model <- neuralnet(formula2, data = nations_train, hidden = 5)
+  
+  nations_results <- compute(nations_model, nations_test[2:31])
+
+  nations_pred <- nations_results$net.result
+  nations_actual <- nations_test$Happiness.Score
+  
+  MAE <- MAE(unnormalize(nations_actual,world_df$Happiness.Score),unnormalize(nations_pred,world_df$Happiness.Score))
+  RMSE <- RMSE(unnormalize(nations_actual,world_df$Happiness.Score),unnormalize(nations_pred,world_df$Happiness.Score))
+  
+  
+  error <- rbind("MAE" = MAE, "RMSE" = RMSE)
+  return(error)
+})
+
+#print out the MAE and RMSE for every fold
+cv_nn2 <- as.data.frame(t(as.data.frame(cv_nn2)))
+cv_nn2
+#average MAE
+mae_nn2 <- mean(cv_nn2$MAE)
+mae_nn2
+#average RMSE
+rmse_nn2 <-mean(cv_nn2$RMSE)
+rmse_nn2
+```
+This neural network model gives an average MAE of `r mae_nn2` and an average RMSE of `r rmse_nn2`.
+
+Last but not least, let's evaluate the kNNregression model. 
+
+```{r echo=FALSE}
+## Automating 10-fold CV for each model using lapply() ----
+#knn regression model
+set.seed(12)
+
+#first apply the model to predict for each fold, then apply the error calculations
+cv_knnreg <- lapply(folds3, function(x) {
+  nations_train <- world_standard[-x, ]
+  
+  nations_test <- world_standard[x, ]
+
+  y <- nations_train[,1]
+    
+  nations_pred <- knnregTrain(train = nations_train[-1], test = nations_test[-1], y = y, k= 11)
+
+  nations_actual <- nations_test$Happiness.Score
+  
+  MAE <- MAE(unnormalize(nations_actual,world_df$Happiness.Score),unnormalize(nations_pred,world_df$Happiness.Score))
+  RMSE <- RMSE(unnormalize(nations_actual,world_df$Happiness.Score),unnormalize(nations_pred,world_df$Happiness.Score))
+  
+  
+  error <- rbind("MAE" = MAE, "RMSE" = RMSE)
+  return(error)
+})
+
+#print out the MAE and RMSE for every fold
+cv_knnreg <- as.data.frame(t(as.data.frame(cv_knnreg)))
+cv_knnreg
+#average MAE
+mae_knnreg <- mean(cv_knnreg$MAE)
+mae_knnreg
+#average RMSE
+rmse_knnreg <- mean(cv_knnreg$RMSE)
+rmse_knnreg
+```
+Much to my surprise, kNN actually performs very well despite the high dimensionality. I can make sense of this logically because there are natural neareast neighbors when comparing nations (aka peer nations). Also the number of data points is quite low. The average MAE for knnregression is `r mae_knnreg` and the average RMSE is `r rmse_knnreg`.
+
+In order to visualize this easiy, I will make a dataframe of all of the MAE and RMSE values. 
+
+```{r echo=FALSE}
+#store all MAE values in a vector and bind them together
+MAE.Values <- rbind(mae_mlreg, mae_regtree, mae_regtree2, mae_nn, mae_nn2, mae_knnreg)
+#store all RMSE values in a vector and bind them together
+RMSE.Values <- rbind(rmse_mlreg, rmse_regtree, rmse_regtree2, rmse_nn, rmse_nn2, rmse_knnreg)
+
+#format final dataframe
+model_comparison <- as.data.frame(cbind(MAE.Values, RMSE.Values)) %>% rename(MAE = "V1", RMSE = "V2")
+
+#change row names
+row.names(model_comparison) <- c("Multiple Linear Regression", "Regression Tree", "Linear Model Regression Tree", "Neural Network 1 hidden node", "Neural Network 5 hidden nodes", "kNN Regression")
+
+#print it out
+model_comparison
+```
+
+```{r echo=FALSE}
+#reformat dataframe in order to visualize
+viz <- as.data.frame(rbind(MAE.Values, RMSE.Values)) %>% rename(Value = "V1")
+viz$Model <- c("Multiple Linear Regression", "Regression Tree", "Linear Model Regression Tree", "Neural Network 1 hidden node", "Neural Network 5 hidden nodes", "kNN Regression", "Multiple Linear Regression", "Regression Tree", "Linear Model Regression Tree", "Neural Network 1 hidden node", "Neural Network 5 hidden nodes", "kNN Regression")
+viz$Metric[1:6] <- "MAE"
+viz$Metric[7:12] <- "RMSE"
+```
+
+```{r echo=FALSE}
+#make heatmap of error metrics for each model
+ggplot(data = viz, aes(x = Metric, y = Model)) + geom_tile(aes(fill = Value)) + scale_fill_gradient(low = "#77dd77", high = "#fdfd96") + geom_text(aes(label = round(Value,2)))
+```
+
+As we can see, the first Multiple Linear Regression and the kNN regression yield the lowest error. 
+
+Let's create a stacked ensemble model now that averages results from the different models. Ensemble learning takes weaker learners and strengthens them, by getting more "perspectives".
+
+
+
+```{r}
+head(pred.mlreg)#no transform applied
+head(pred.regtree)#no transform applied
+head(pred.regtree2)#no transform applied
+head(pred.nn)#min/max normalization transform applied
+head(pred.nn2)#min/max normalization transform applied 
+head(pred.knnreg)#min/max normalization transform applied
+```
+
+Remember to unnormalize the predictions!
+
+```{r echo=FALSE}
+pred.nn <- as.vector(unnormalize(pred.nn, world_df$Happiness.Score))
+pred.nn2 <- as.vector(unnormalize(pred.nn2, world_df$Happiness.Score))
+pred.knnreg <- unnormalize(pred.knnreg, world_df$Happiness.Score)
+```
+
+```{r echo=FALSE}
+#make a dataframe with all predictions
+pred_df <- as.data.frame(cbind(pred.mlreg, pred.regtree, pred.regtree2, pred.nn, pred.nn2, pred.knnreg))
+
+#make a new column of the averages 
+pred_df$average.pred <- rowMeans(pred_df)
+
+#make sure it worked 
+head(pred_df)
+```
+Now let's see the MAE and RMSE of this simple averaging ensemble model. 
+
+```{r echo=FALSE}
+MAE_e1 <- MAE(world_test$Happiness.Score, pred_df$average.pred)
+MAE_e1
+RMSE_e1 <- RMSE(world_test$Happiness.Score, pred_df$average.pred)
+RMSE_e1
+```
+This is the lowest yet! Now let's add this to the heatmap. 
+
+```{r echo=FALSE}
+#make heatmap of error metrics for each model
+viz <- rbind(viz, c(MAE_e1,"Ensemble 1", "MAE"))
+viz <- rbind(viz, c(RMSE_e1,"Ensemble 1", "RMSE"))
+viz$Value <- viz$Value %>% as.numeric
+
+
+ggplot(data = viz, aes(x = Metric, y = Model)) + geom_tile(aes(fill = Value)) + scale_fill_gradient(low = "#77dd77", high = "#fdfd96") + geom_text(aes(label = round(Value,2)))
+```
+As you can see, the Ensemble now has the best performance with a MAE of `r MAE_e1` and a RMSE of `r RMSE_e1`. 
+
+
+Now, finally let's stack another model on top of other models and use their averaged predictions as inputs to train the model! 
+
+I am choosing to stack a regression tree on top of the simple ensemble, mostly due to its short training phase. In order to do this, I am going to add the predictions as a new predictor to the regression tree. 
+
+```{r include=FALSE}
+#find predicted values for the training data for every model
+mlreg_fitted_values <- m.mlreg$fitted.values %>% as.vector()
+nn_fitted_values <- unnormalize(m.nn$net.result[[1]] ,world_df$Happiness.Score)  %>% as.vector()
+nn2_fitted_values <- unnormalize(m.nn2$net.result[[1]],world_df$Happiness.Score) %>% as.vector
+knn_fitted_values <- unnormalize(knnregTrain(train = world_train4, test = world_train4, y = train3.scores, k= 11), world_df$Happiness.Score) %>% as.vector
+regtree_fitted_values <- predict(m.regtree, world_train2) %>% as.vector
+regtree2_fitted_values <- predict(m.regtree2, world_train2) %>% as.vector
+
+#make dataframe of fitted values 
+pred_df2 <- as.data.frame(cbind(mlreg_fitted_values, regtree_fitted_values, regtree2_fitted_values, nn_fitted_values, nn2_fitted_values, knn_fitted_values)) 
+
+#make a new column of the averages 
+pred_df2$average.pred <- rowMeans(pred_df2)
+
+#make sure it worked 
+head(pred_df2)
+```
+
+```{r include=FALSE}
+#add averaged predictions to dataset 
+ensemble2_train <- world_train2
+ensemble2_test <- world_test2
+ensemble2_train$average.pred <- pred_df2$average.pred
+ensemble2_test$average.pred <- pred_df$average.pred
+```
+
+```{r echo=FALSE}
+#use rpart to train ensemble model
+ensemble2 <- rpart(Happiness.Score ~ Region + Life.Expectancy.at.Birth + Expected.Years.of.Education + 
+    Mean.Years.of.Education + Gross.National.Income.per.Capita + 
+    Population + Pop.Density.per.sq.mi + Coast.Area.Ratio + 
+    Net.migration + Infant.Mortality.per.1000.births + GDP.per.capita +
+    Literacy.percent + Phones.per.1000.people + Arable.percent + 
+    Crops.percent + Other.Land.Use.percent + Climate + Birthrate + 
+    Deathrate + Agriculture + Industry + Service +average.pred, data = ensemble2_train)
+#print it out
+ensemble2
+```
+
+This output shows the logic behind the tree. As you can see, the previous predictions are weighing heavily on the tree's new predictions.
+
+Now let's visualize the tree.
+
+```{r}
+#Create visual
+rpart.plot(ensemble2, digits = 3, tweak =1)
+```
+
+Now let's evaluate this final ensemble by finding the MAE and RMSE.
+
+```{r echo=FALSE}
+#prediction on validation data
+pred.ensemble2 <- predict(ensemble2, ensemble2_test)
+```
+
+
+```{r echo=FALSE}
+MAE_e2 <- MAE(ensemble2_test$Happiness.Score, pred.ensemble2)
+MAE_e2
+RMSE_e2 <- RMSE(ensemble2_test$Happiness.Score, pred.ensemble2)
+RMSE_e2
+```
+The simple averaging ensemble had a lower MAE and RMSE. The stacked model had a MAE of `r MAE_e2` and a RMSE of `r RMSE_e2`. Now let's add this to the heatmap. 
+
+```{r echo=FALSE}
+#make heatmap of error metrics for each model
+viz <- rbind(viz, c(MAE_e2,"Ensemble 2", "MAE"))
+viz <- rbind(viz, c(RMSE_e2,"Ensemble 2", "RMSE"))
+viz$Value <- viz$Value %>% as.numeric
+
+
+ggplot(data = viz, aes(x = Metric, y = Model)) + geom_tile(aes(fill = Value)) + scale_fill_gradient(low = "#77dd77", high = "#fdfd96") + geom_text(aes(label = round(Value,2)))
+```
+The ensemble models did improve performance over any singular model, which is a good sign! The overall errors are not that high. The predicted happiness scores tend to be pretty darn close to the actuals. Stacking focuses on removing bias by taking into account under and over predicters, hence why the averaging makes for better predictions. 
+
+# Next Steps 
+
+If time allowed, for further analysis, I would like to:
+
+-look at classification of a nation into a region of the world 
+
+-explore binary classification of a "happy" or "unhappy" threshold
+
+- do a clustering analysis with kmeans to see if there are clusters in the data
+
+- do forecasting on historical human development statistics
+
+
+# References
+
+https://cran.r-project.org/web/packages/bestNormalize/vignettes/bestNormalize.html
+
+http://www.sthda.com/english/articles/39-regression-model-diagnostics/160-multicollinearity-essentials-and-vif-in-r/
+
+https://www.r-bloggers.com/how-to-make-a-simple-heatmap-in-ggplot2/
+
+https://cran.r-project.org/web/packages/bestNormalize/vignettes/bestNormalize.html
+
+
+
+
+
+
+
+
+
+
