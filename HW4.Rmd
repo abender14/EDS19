@@ -11,6 +11,14 @@ output: rticles::acm_article
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+#install.packages("colorspace")
+#install.packages("stringi")
+#install.packages("tidyverse")
+#install.packages("ggplot2")
+#install.packages("readr")
+#install.packages("rticles")
+library(stringi)
+library(colorspace)
 library(tidyverse)
 library(ggplot2)
 library(readr)
